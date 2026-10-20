@@ -787,14 +787,14 @@ function renderChat() {
     if (day !== lastDay) { html += `<div class="daysep">${esc(day)}</div>`; lastDay = day; prev = null; }
     const wnd = asWander(m), w = wnd ? who(null) : who(m.user_id), me = !wnd && m.user_id === S.me.id;
     if (m.kind === "system") { html += `<div class="sys">✈ <b>${esc(w.name)}</b> ${esc(m.body)}</div>`; prev = null; continue; }
-    const reply = `<button class="reply-btn" type="button" data-reply="${esc(m.id)}" aria-label="Reply">↩ Reply</button>`;
+    const reply = `<button class="reply-btn" type="button" data-reply="${esc(m.id)}" aria-label="Reply" title="Reply">↩</button>`;
     if (m.kind === "poll" || m.kind === "card") {
       const title = m.kind === "poll" ? `📊 ${esc((m.data && m.data.q) || m.body)}` : "";
-      html += `<div class="cardmsg ${wnd ? "wander" : ""}" id="m-${esc(m.id)}"><div class="head"><img src="${esc(w.avatar)}" alt=""><span>${esc(w.name)}${m.data && m.data.label ? " · " + esc(m.data.label) : ""} · ${esc(timeLabel(m.created_at))}</span><span style="margin-left:auto">${reply}</span></div>${quoteHTML(m)}${title ? `<b>${title}</b>` : ""}${m.kind === "poll" ? pollHTML(m) : cardBody(m)}</div>`;
+      html += `<div class="cardmsg ${wnd ? "by-wander" : ""}" id="m-${esc(m.id)}"><div class="head"><img src="${esc(w.avatar)}" alt=""><span class="nm">${esc(w.name)}${m.data && m.data.label ? ` <span class="lbl">${esc(m.data.label)}</span>` : ""}</span><span class="tm">${esc(timeLabel(m.created_at))}</span>${reply}</div>${quoteHTML(m)}${title ? `<div class="poll-q">${title}</div>` : ""}${m.kind === "poll" ? pollHTML(m) : cardBody(m)}</div>`;
       prev = null; continue;
     }
     const cont = prev && prev.user_id === m.user_id && !asWander(prev) === !wnd && (new Date(m.created_at) - new Date(prev.created_at)) < 5 * 60000 && !m.reply_to;
-    html += `<div class="msg ${me ? "me" : ""} ${wnd ? "ai" : ""} ${cont ? "cont" : ""}" id="m-${esc(m.id)}"><img src="${esc(w.avatar)}" alt=""><div class="bub"><div class="meta-row"><span class="who">${esc(w.name)}${m.data && m.data.label ? " · " + esc(m.data.label) : ""}</span><span class="small" style="opacity:.7">${esc(timeLabel(m.created_at))} ${reply}</span></div>${quoteHTML(m)}<div style="white-space:pre-wrap">${esc(m.body)}</div></div></div>`;
+    html += `<div class="msg ${me ? "me" : ""} ${wnd ? "ai" : ""} ${cont ? "cont" : ""}" id="m-${esc(m.id)}"><img src="${esc(w.avatar)}" alt=""><div class="bub"><div class="meta-row"><span class="who">${esc(w.name)}${m.data && m.data.label ? ` <span class="lbl">${esc(m.data.label)}</span>` : ""}</span><span class="tm">${esc(timeLabel(m.created_at))}${reply}</span></div>${quoteHTML(m)}<div style="white-space:pre-wrap">${esc(m.body)}</div></div></div>`;
     prev = m;
   }
   box.innerHTML = html;
@@ -933,8 +933,8 @@ function armReset(btn, label, fn) {
     try { await fn(); toast("Done. Fresh start ✨"); } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = label; }
   };
 }
-armReset($("#resetIdeas"), "🧹 Reset board", async () => { await DB.clear("ideas"); reload("ideas"); reload("idea_votes"); });
-armReset($("#resetChat"), "🧹 Reset chat", async () => { await DB.clear("chat_messages"); reload("chat_messages"); reload("poll_votes"); });
+armReset($("#resetIdeas"), "🧹 Reset", async () => { await DB.clear("ideas"); reload("ideas"); reload("idea_votes"); });
+armReset($("#resetChat"), "🧹 Reset", async () => { await DB.clear("chat_messages"); reload("chat_messages"); reload("poll_votes"); });
 $("#crewSeg").onclick = e => {
   const b = e.target.closest("[data-seg]"); if (!b) return; S.crewSeg = b.dataset.seg;
   $$("#crewSeg [data-seg]").forEach(x => x.setAttribute("aria-selected", x === b));
@@ -1088,7 +1088,7 @@ function setTab(t) {
   S.tab = t; $$(".tab").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t));
   ["plan", "trips", "crew", "games"].forEach(k => $("#view-" + k).hidden = k !== t);
   window.scrollTo({ top: 0 }); presence({ tab: t });
-  if (t === "crew") { S.lastSeenChat = Date.now(); store.set("lastChat", S.lastSeenChat); badge(); renderChat(); setTimeout(() => { const c = $("#chat"); c.scrollTop = c.scrollHeight; }, 50); }
+  if (t === "crew") { S.lastSeenChat = Date.now(); store.set("lastChat", S.lastSeenChat); badge(); renderChat(); setTimeout(() => { const c = $("#chat"); c.scrollTop = c.scrollHeight; if (S.crewSeg === "chat" && window.innerWidth <= 520) $("#crewSeg").scrollIntoView({ block: "start" }); }, 60); }
   if (t === "trips") renderTrips();
   if (t === "games" && S.game !== "home") showGame(S.game);
 }
