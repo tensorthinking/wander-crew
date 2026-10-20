@@ -30,22 +30,33 @@ function extractJSON(text: string) {
   throw new Error("AI reply was not JSON");
 }
 
-async function claude(prompt: string, opts: { fast?: boolean; maxTokens?: number } = {}) {
+async function callModel(model: string, prompt: string, maxTokens: number) {
   const key = Deno.env.get("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set on the server");
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({
-      model: opts.fast ? FAST : MODEL,
-      max_tokens: opts.maxTokens || 2000,
-      system: PERSONA,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: PERSONA, messages: [{ role: "user", content: prompt }] }),
   });
   if (!r.ok) throw new Error(`Anthropic API ${r.status}: ${(await r.text()).slice(0, 300)}`);
   const data = await r.json();
-  return (data.content || []).filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("");
+  const blocks = data.content || [];
+  const text = blocks.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("").trim();
+  if (!text) console.warn(`empty reply from ${model}: stop_reason=${data.stop_reason} blocks=${blocks.map((b: { type: string }) => b.type).join(",")}`);
+  return { text, stop: data.stop_reason };
+}
+
+// Fast model first when asked; if it comes back empty (e.g. ran out of room), retry bigger, then on the main model.
+async function claude(prompt: string, opts: { fast?: boolean; maxTokens?: number } = {}) {
+  const max = opts.maxTokens || 2000;
+  const tries: [string, number][] = opts.fast
+    ? [[FAST, Math.max(max, 1500)], [FAST, Math.max(max * 2, 4000)], [MODEL, Math.max(max * 2, 4000)]]
+    : [[MODEL, max], [MODEL, Math.min(max * 2, 16000)]];
+  for (const [model, tokens] of tries) {
+    const { text } = await callModel(model, prompt, tokens);
+    if (text) return text;
+  }
+  throw new Error("Wander went quiet (the AI returned an empty reply). Try again in a moment.");
 }
 
 const S = (v: unknown, n = 300) => String(v ?? "").slice(0, n);
@@ -64,7 +75,7 @@ ${p.reality ? `Nothing truly fits. Engine notes: ${S(p.reality, 600)}` : ""}
 Pick up to 8 of these keys, best first, for THIS crew (season, vibe, visa hassle, how well the budget is used). For each write a punchy one-liner "line" (max 20 words, can be cheeky) and an honest "catch" (max 14 words: the real downside).
 Also write "roast": one or two sentences reacting to their overall plan. If the budget/style combo is unrealistic, roast it gently and say what it really buys; otherwise hype them up.
 Reply with only JSON: {"roast":"...","picks":[{"key":"...","line":"...","catch":"..."}]}`;
-    return extractJSON(await claude(prompt, { fast: true, maxTokens: 1800 }));
+    return extractJSON(await claude(prompt, { fast: true, maxTokens: 3000 }));
   },
 
   async itinerary(p) {
@@ -97,7 +108,7 @@ Trips on their board: ${trips || "none yet"}.
 Recent chat:
 ${recent}
 
-${S(p.askerName, 30) || "Someone"} asks you: ${S(p.question, 600)}`, { fast: true, maxTokens: 400 });
+${S(p.askerName, 30) || "Someone"} asks you: ${S(p.question, 600)}`, { fast: true, maxTokens: 1500 });
     const { error } = await ctx.admin.from("chat_messages").insert({ user_id: null, kind: "ai", body: text.slice(0, 1990) });
     if (error) throw new Error(error.message);
     return { ok: true };
@@ -105,7 +116,7 @@ ${S(p.askerName, 30) || "Someone"} asks you: ${S(p.question, 600)}`, { fast: tru
 
   async ideas(p, ctx) {
     const list = extractJSON(await claude(`Brainstorm 5 fun, specific, slightly wild ideas for the crew's trip${p.dests ? ` (destinations on their board: ${S(p.dests, 300)})` : ""}: activities, challenges, themed nights, food quests. Each under 14 words. Don't repeat: ${S((p.existing || []).join(" | "), 1200)}.
-Reply with only a JSON array of 5 strings.`, { fast: true, maxTokens: 500 }));
+Reply with only a JSON array of 5 strings.`, { fast: true, maxTokens: 1500 }));
     const rows = (Array.isArray(list) ? list : []).slice(0, 5).map((t: unknown) => ({ user_id: null, body: S(t, 230), color: Math.floor(Math.random() * 6) }));
     if (rows.length) { const { error } = await ctx.admin.from("ideas").insert(rows); if (error) throw new Error(error.message); }
     return { added: rows.length };
@@ -113,12 +124,12 @@ Reply with only a JSON array of 5 strings.`, { fast: true, maxTokens: 500 }));
 
   async quiz(p) {
     return extractJSON(await claude(`Write 7 fun, accurate multiple-choice trivia questions for Indian friends planning a trip${p.dests ? ` to: ${S(p.dests, 300)}` : " anywhere in the world"}. Mix food, culture, landmarks, money, language, quirky facts. Only facts you're sure of. Exactly 4 short options each; vary the correct position. Add a one-sentence fun fact, a bit cheeky.
-Reply with only JSON: {"questions":[{"q":"...","options":["a","b","c","d"],"answer":0,"fact":"..."}]}`, { maxTokens: 2500 }));
+Reply with only JSON: {"questions":[{"q":"...","options":["a","b","c","d"],"answer":0,"fact":"..."}]}`, { maxTokens: 4000 }));
   },
 
   async tot(p) {
     return extractJSON(await claude(`Give one funny, genuinely tricky "this or that" travel dilemma for Indian friends on a group trip. Avoid: ${S((p.seen || []).join(" | "), 800)}.
-Reply with only JSON: {"prompt":"short framing question","a":"option A under 9 words","ea":"one emoji","b":"option B under 9 words","eb":"one emoji"}`, { fast: true, maxTokens: 300 }));
+Reply with only JSON: {"prompt":"short framing question","a":"option A under 9 words","ea":"one emoji","b":"option B under 9 words","eb":"one emoji"}`, { fast: true, maxTokens: 1200 }));
   },
 };
 
