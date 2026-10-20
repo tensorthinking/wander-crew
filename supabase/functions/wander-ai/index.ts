@@ -30,33 +30,60 @@ function extractJSON(text: string) {
   throw new Error("AI reply was not JSON");
 }
 
-async function callModel(model: string, prompt: string, maxTokens: number) {
+let thinkingParamOK = true; // flips off if the API ever rejects the parameter
+
+async function callModel(model: string, prompt: string, maxTokens: number, timeoutMs: number) {
   const key = Deno.env.get("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set on the server");
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: PERSONA, messages: [{ role: "user", content: prompt }] }),
-  });
+  const send = async (withThinkingOff: boolean) => {
+    const body: Record<string, unknown> = { model, max_tokens: maxTokens, system: PERSONA, messages: [{ role: "user", content: prompt }] };
+    if (withThinkingOff) body.thinking = { type: "disabled" }; // answer directly: faster, and no empty thinking-only replies
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      return await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST", signal: ctl.signal,
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } finally { clearTimeout(t); }
+  };
+  let r = await send(thinkingParamOK);
+  if (r.status === 400 && thinkingParamOK) {
+    const errText = await r.text();
+    if (/thinking/i.test(errText)) { console.warn("thinking param rejected, retrying without it"); thinkingParamOK = false; r = await send(false); }
+    else throw new Error(`Anthropic API 400: ${errText.slice(0, 300)}`);
+  }
   if (!r.ok) throw new Error(`Anthropic API ${r.status}: ${(await r.text()).slice(0, 300)}`);
   const data = await r.json();
   const blocks = data.content || [];
-  const text = blocks.filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("").trim();
-  if (!text) console.warn(`empty reply from ${model}: stop_reason=${data.stop_reason} blocks=${blocks.map((b: { type: string }) => b.type).join(",")}`);
-  return { text, stop: data.stop_reason };
+  const text = blocks.filter((x: { type: string }) => x.type === "text").map((x: { text: string }) => x.text).join("").trim();
+  if (!text) console.warn(`empty reply from ${model}: stop_reason=${data.stop_reason} blocks=${blocks.map((x: { type: string }) => x.type).join(",")}`);
+  return text;
 }
 
-// Fast model first when asked; if it comes back empty (e.g. ran out of room), retry bigger, then on the main model.
+// Supabase kills a request at ~150s, so every attempt shares a deadline and we fall back to the fast model in time.
 async function claude(prompt: string, opts: { fast?: boolean; maxTokens?: number } = {}) {
   const max = opts.maxTokens || 2000;
-  const tries: [string, number][] = opts.fast
-    ? [[FAST, Math.max(max, 1500)], [FAST, Math.max(max * 2, 4000)], [MODEL, Math.max(max * 2, 4000)]]
-    : [[MODEL, max], [MODEL, Math.min(max * 2, 16000)]];
-  for (const [model, tokens] of tries) {
-    const { text } = await callModel(model, prompt, tokens);
-    if (text) return text;
+  const deadline = Date.now() + 135_000;
+  const tries: [string, number, number][] = opts.fast
+    ? [[FAST, max, 40_000], [FAST, max * 2, 40_000], [MODEL, max * 2, 50_000]]
+    : [[MODEL, max, 95_000], [FAST, max, 60_000]];
+  let lastErr: unknown = null;
+  for (const [model, tokens, budget] of tries) {
+    const left = deadline - Date.now();
+    if (left < 8_000) break;
+    try {
+      const text = await callModel(model, prompt, tokens, Math.min(budget, left));
+      if (text) return text;
+    } catch (e) {
+      lastErr = e;
+      const msg = String((e as Error).message || e);
+      if (/credit balance|ANTHROPIC_API_KEY|401|403/.test(msg)) throw e;   // no point retrying these
+      console.warn(`attempt on ${model} failed: ${msg.slice(0, 200)}`);
+    }
   }
-  throw new Error("Wander went quiet (the AI returned an empty reply). Try again in a moment.");
+  if (lastErr && !/abort/i.test(String((lastErr as Error).message))) throw lastErr;
+  throw new Error("Wander took too long to answer. Try again, or try fewer days.");
 }
 
 const S = (v: unknown, n = 300) => String(v ?? "").slice(0, n);

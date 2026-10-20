@@ -153,6 +153,8 @@ async function ai(task, payload) {
   if (error) {
     let msg = error.message || "Wander tripped over something.";
     try { const j = await error.context.json(); if (j && j.error) msg = j.error; } catch {}
+    const status = error.context && error.context.status;
+    if (status === 546 || /Failed to send a request/i.test(msg)) msg = "Wander took too long to answer (or your connection dropped). Try again in a moment.";
     throw new Error(msg);
   }
   if (data && data.error) throw new Error(data.error);
