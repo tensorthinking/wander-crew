@@ -89,12 +89,12 @@ const S = {
   me: null, isAdmin: false,
   form: Object.assign({ budget: 120000, style: 1, days: 6, people: 4, start: "2027-06-12", from: "BLR", regions: [], vibes: [] }, store.get("form", {})),
   rec: null, recForm: null, ai: null, aiBusy: false,
-  profiles: {}, trips: [], votes: [], chat: [], ideas: [], ideaVotes: [], games: {}, moves: [], allow: [], peers: [],
+  profiles: {}, trips: [], votes: [], chat: [], pollVotes: [], ideas: [], ideaVotes: [], games: {}, moves: [], allow: [], peers: [],
   tab: "plan", crewSeg: "chat", game: "home", lastSeenChat: store.get("lastChat", 0),
 };
 
 /* ------------------------------------------------------------------ data layer */
-const LOCAL_TABLES = ["profiles", "trips", "trip_votes", "chat_messages", "ideas", "idea_votes", "game_state", "game_moves", "crew_allowlist"];
+const LOCAL_TABLES = ["profiles", "trips", "trip_votes", "chat_messages", "poll_votes", "ideas", "idea_votes", "game_state", "game_moves", "crew_allowlist"];
 const local = { get: t => store.get("db:" + t, []), set: (t, rows) => store.set("db:" + t, rows) };
 const DB = {
   async select(t, q = {}) {
@@ -121,6 +121,10 @@ const DB = {
     }
     const { error } = await sb.from(t).upsert(row, { onConflict: keys.join(",") }); if (error) throw error; return row;
   },
+  async clear(t) {
+    if (!LIVE) { local.set(t, []); bus(t); return; }
+    const { error } = await sb.from(t).delete().not("id", "is", null); if (error) throw error;
+  },
   async remove(t, match) {
     if (!LIVE) { local.set(t, local.get(t).filter(r => !Object.entries(match).every(([k, v]) => r[k] === v))); bus(t); return; }
     let req = sb.from(t).delete(); for (const [k, v] of Object.entries(match)) req = req.eq(k, v);
@@ -135,6 +139,7 @@ const LOADERS = {
   profiles: async () => { S.profiles = Object.fromEntries((await DB.select("profiles")).map(p => [p.id, p])); renderPeople(); renderChat(); renderBoard(); renderTrips(); },
   trips: async () => { S.trips = await DB.select("trips", { order: "created_at", desc: true, limit: 80 }); renderTrips(); refreshOpenTrip(); },
   trip_votes: async () => { S.votes = await DB.select("trip_votes"); renderTrips(); refreshOpenTrip(); },
+  poll_votes: async () => { S.pollVotes = await DB.select("poll_votes"); renderChat(); },
   chat_messages: async () => { S.chat = (await DB.select("chat_messages", { order: "created_at", desc: true, limit: 100 })).reverse(); renderChat(); badge(); },
   ideas: async () => { S.ideas = await DB.select("ideas", { order: "created_at", desc: true, limit: 120 }); renderBoard(); },
   idea_votes: async () => { S.ideaVotes = await DB.select("idea_votes"); renderBoard(); },
@@ -197,11 +202,12 @@ async function startApp() {
   $("#gate").hidden = true; $("#app").hidden = false;
   $("#meAvatar").src = S.me.avatar || ANON;
   $("#accessTab").hidden = !S.isAdmin;
+  $$(".admin-only").forEach(el => el.hidden = !S.isAdmin && LIVE);
   initForm(); runPlan(false);
   await Promise.all(Object.keys(LOADERS).map(t => LOADERS[t]().catch(e => console.warn(t, e))));
   if (LIVE) {
     const ch = sb.channel("db-changes");
-    ["profiles", "trips", "trip_votes", "chat_messages", "ideas", "idea_votes", "game_state", "game_moves"].forEach(t =>
+    ["profiles", "trips", "trip_votes", "chat_messages", "poll_votes", "ideas", "idea_votes", "game_state", "game_moves"].forEach(t =>
       ch.on("postgres_changes", { event: "*", schema: "public", table: t }, () => reload(t)));
     ch.subscribe();
     startPresence();
@@ -737,40 +743,171 @@ function renderPeople() {
 }
 $("#onlineStrip").onclick = () => setTab("crew");
 
-let chatJustSent = false;
+/* ------------------------------------------------------------------ chat: structure, replies, commands, polls, surprises */
+let chatJustSent = false, replyTo = null;
+const msgById = id => S.chat.find(m => m.id === id);
+const pollVotesFor = id => S.pollVotes.filter(v => v.message_id === id);
+const dayLabel = iso => { const d = new Date(iso), t = new Date(); const k = x => x.toDateString(); if (k(d) === k(t)) return "Today"; t.setDate(t.getDate() - 1); if (k(d) === k(t)) return "Yesterday"; return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }); };
+const timeLabel = iso => new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+const asWander = m => m.user_id === null || (m.data && m.data.wander);
+const snippet = m => m ? (m.kind === "poll" ? "📊 " + ((m.data && m.data.q) || m.body) : m.kind === "card" ? "🎲 " + m.body : m.body).slice(0, 90) : "";
+
+function quoteHTML(m) {
+  if (!m.reply_to) return "";
+  const r = msgById(m.reply_to);
+  return `<button class="quote" type="button" data-jump="${esc(m.reply_to)}"><b>${esc(r ? (asWander(r) ? "Wander" : who(r.user_id).name) : "Earlier message")}</b>${esc(r ? snippet(r) : "No longer in view")}</button>`;
+}
+function pollHTML(m) {
+  const d = m.data || {}, opts = Array.isArray(d.options) ? d.options : [];
+  const votes = pollVotesFor(m.id), total = votes.length, mine = votes.find(v => v.user_id === S.me.id);
+  return opts.map((o, i) => {
+    const vs = votes.filter(v => v.option === i), pct = total ? Math.round(vs.length / total * 100) : 0;
+    return `<button class="poll-opt" type="button" data-poll="${esc(m.id)}" data-opt="${i}" aria-pressed="${!!mine && mine.option === i}"><i style="width:${pct}%"></i><span>${esc(o)}</span><span class="n">${vs.length ? `<span class="voters">${vs.slice(0, 4).map(v => `<img src="${esc(who(v.user_id).avatar)}" alt="">`).join("")}</span> ` : ""}${pct}%</span></button>`;
+  }).join("") + `<div class="small muted">${total} vote${total === 1 ? "" : "s"} · tap to vote, tap again to change</div>`;
+}
+function cardBody(m) {
+  const d = m.data || {};
+  switch (d.type) {
+    case "roll": return `<div class="big">🎲 ${num(d.value)}</div><div class="small muted">d${num(d.sides)}</div>`;
+    case "coin": return `<div class="big">${d.value === "Heads" ? "🪙 Heads" : "🪙 Tails"}</div>`;
+    case "pick": return `<div class="small muted">From: ${esc((d.from || []).join(", "))}</div><div class="big">👉 ${esc(d.value)}</div>`;
+    case "countdown": return `<div class="big">⏳ ${num(d.days)} days</div><div class="small">until ${esc(d.what)} (${esc(fmtDate(d.date))})</div>`;
+    case "split": return `<div class="big">${inr(d.each)} each</div><div class="small muted">${inr(d.total)} split ${num(d.n)} ways</div>`;
+    case "trip": return `<div class="big">${esc(d.name)}</div><div class="small">${num(d.days)} days · ${lakh(d.total)} each · ♥ ${num(d.votes)}</div>${d.id ? `<button class="btn small" data-trip="${esc(d.id)}" type="button">Open plan</button>` : ""}`;
+    default: return `<div>${esc(m.body)}</div>`;
+  }
+}
 function renderChat() {
   const box = $("#chat"); if (!box) return;
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
-  if (!S.chat.length) { box.innerHTML = `<div class="empty"><div style="font-size:36px">💬</div><b>Say hi to the crew</b><span class="small">Start a message with <b>@wander</b> and the AI answers for everyone.</span></div>`; return; }
-  box.innerHTML = S.chat.map(m => {
-    const w = who(m.user_id);
-    if (m.kind === "system") return `<div class="sys">✈ <b>${esc(w.name)}</b> ${esc(m.body)}</div>`;
-    const me = m.user_id === S.me.id;
-    return `<div class="msg ${me ? "me" : ""} ${m.kind === "ai" ? "ai" : ""}"><img src="${esc(w.avatar)}" alt=""><div class="bub"><div class="who">${esc(w.name)} · ${esc(ago(m.created_at))}</div><div style="white-space:pre-wrap">${esc(m.body)}</div></div></div>`;
-  }).join("");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  if (!S.chat.length) { box.innerHTML = `<div class="empty"><div style="font-size:36px">💬</div><b>Say hi to the crew</b><span class="small">Type <b>/</b> to see commands like <b>/poll</b>, <b>/roll</b>, <b>/pick</b>, or ask the AI with <b>@wander</b>.</span></div>`; return; }
+  let html = "", lastDay = "", prev = null;
+  for (const m of S.chat) {
+    const day = dayLabel(m.created_at);
+    if (day !== lastDay) { html += `<div class="daysep">${esc(day)}</div>`; lastDay = day; prev = null; }
+    const wnd = asWander(m), w = wnd ? who(null) : who(m.user_id), me = !wnd && m.user_id === S.me.id;
+    if (m.kind === "system") { html += `<div class="sys">✈ <b>${esc(w.name)}</b> ${esc(m.body)}</div>`; prev = null; continue; }
+    const reply = `<button class="reply-btn" type="button" data-reply="${esc(m.id)}" aria-label="Reply">↩ Reply</button>`;
+    if (m.kind === "poll" || m.kind === "card") {
+      const title = m.kind === "poll" ? `📊 ${esc((m.data && m.data.q) || m.body)}` : "";
+      html += `<div class="cardmsg ${wnd ? "wander" : ""}" id="m-${esc(m.id)}"><div class="head"><img src="${esc(w.avatar)}" alt=""><span>${esc(w.name)}${m.data && m.data.label ? " · " + esc(m.data.label) : ""} · ${esc(timeLabel(m.created_at))}</span><span style="margin-left:auto">${reply}</span></div>${quoteHTML(m)}${title ? `<b>${title}</b>` : ""}${m.kind === "poll" ? pollHTML(m) : cardBody(m)}</div>`;
+      prev = null; continue;
+    }
+    const cont = prev && prev.user_id === m.user_id && !asWander(prev) === !wnd && (new Date(m.created_at) - new Date(prev.created_at)) < 5 * 60000 && !m.reply_to;
+    html += `<div class="msg ${me ? "me" : ""} ${wnd ? "ai" : ""} ${cont ? "cont" : ""}" id="m-${esc(m.id)}"><img src="${esc(w.avatar)}" alt=""><div class="bub"><div class="meta-row"><span class="who">${esc(w.name)}${m.data && m.data.label ? " · " + esc(m.data.label) : ""}</span><span class="small" style="opacity:.7">${esc(timeLabel(m.created_at))} ${reply}</span></div>${quoteHTML(m)}<div style="white-space:pre-wrap">${esc(m.body)}</div></div></div>`;
+    prev = m;
+  }
+  box.innerHTML = html;
   if (atBottom || chatJustSent) { box.scrollTop = box.scrollHeight; chatJustSent = false; }
 }
 function badge() {
   const n = S.tab === "crew" ? 0 : S.chat.filter(m => new Date(m.created_at).getTime() > S.lastSeenChat && m.user_id !== S.me.id).length;
   const b = $("#chatBadge"); b.hidden = !n; b.textContent = n > 9 ? "9+" : n;
 }
-async function sendChat(text) {
+async function postChat(row) {
   chatJustSent = true;
-  try { await DB.insert("chat_messages", { user_id: S.me.id, kind: "msg", body: String(text).slice(0, 1990) }); if (!LIVE) reload("chat_messages"); }
-  catch (e) { toast(e.message); }
+  const r = { user_id: S.me.id, kind: "msg", ...row };
+  if (replyTo) r.reply_to = replyTo; setReply(null);
+  try { const saved = await DB.insert("chat_messages", r); if (!LIVE) reload("chat_messages"); return saved; }
+  catch (e) { toast(/reply_to|data|kind_check|column/i.test(e.message) ? "Chat update pending: ask the admin to run the 002 SQL script in Supabase." : e.message); }
 }
-$("#chatForm").onsubmit = async e => {
-  e.preventDefault(); const i = $("#chatInput"); const t = i.value.trim(); if (!t) return; i.value = "";
-  await sendChat(t);
-  if (/^@wander\b/i.test(t)) {
-    if (!AI_ON) return toast("Wander is off in preview mode.");
-    if (S.chatAIBusy) return toast("Wander is still answering the last one.");
-    S.chatAIBusy = true;
-    const recent = S.chat.slice(-14).map(m => ({ who: who(m.user_id).name, text: m.body }));
-    const trips = S.trips.slice(0, 6).map(x => ({ name: DEST[x.dest_key]?.name, days: x.form?.days, total: x.total, votes: voteCount(x.id) }));
-    ai("chat", { question: t.replace(/^@wander\b[:,]?\s*/i, ""), recent: recent.slice(-6), trips, askerName: S.me.name }).catch(err => toast(err.message)).finally(() => { S.chatAIBusy = false; });
+const sendChat = text => postChat({ body: String(text).slice(0, 1990) });
+function setReply(id) {
+  replyTo = id; const bar = $("#replyBar");
+  if (!id) { bar.hidden = true; return; }
+  const m = msgById(id); $("#replyTxt").innerHTML = `Replying to <b>${esc(m ? (asWander(m) ? "Wander" : who(m.user_id).name) : "")}</b>: ${esc(snippet(m))}`;
+  bar.hidden = false; $("#chatInput").focus();
+}
+$("#replyCancel").onclick = () => setReply(null);
+$("#chat").addEventListener("click", async e => {
+  const r = e.target.closest("[data-reply]"); if (r) return setReply(isNaN(+r.dataset.reply) ? r.dataset.reply : +r.dataset.reply);
+  const j = e.target.closest("[data-jump]"); if (j) { const el = document.getElementById("m-" + j.dataset.jump); if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.animate([{ outline: "3px solid var(--grape)" }, { outline: "3px solid transparent" }], 1200); } return; }
+  const p = e.target.closest("[data-poll]");
+  if (p) {
+    const id = isNaN(+p.dataset.poll) ? p.dataset.poll : +p.dataset.poll, opt = num(p.dataset.opt);
+    const mine = pollVotesFor(id).find(v => v.user_id === S.me.id);
+    try {
+      if (mine && mine.option === opt) await DB.remove("poll_votes", { message_id: id, user_id: S.me.id });
+      else await DB.upsert("poll_votes", { message_id: id, user_id: S.me.id, option: opt }, ["message_id", "user_id"]);
+      reload("poll_votes");
+    } catch (err) { toast(/poll_votes/.test(err.message) ? "Polls need the 002 SQL update in Supabase." : err.message); }
+    return;
   }
+  const t = e.target.closest("[data-trip]"); if (t) openTrip(t.dataset.trip);
+});
+
+/* ---- slash commands */
+const parseOpts = s => s.split("|").map(x => x.trim()).filter(Boolean);
+const tripCtx = () => S.trips.slice(0, 6).map(x => ({ name: DEST[x.dest_key]?.name, days: x.form?.days, total: x.total, votes: voteCount(x.id) }));
+const recentCtx = () => S.chat.filter(m => m.kind !== "system").slice(-6).map(m => ({ who: asWander(m) ? "Wander" : who(m.user_id).name, text: snippet(m) }));
+async function askWander(task, payload, busyMsg) {
+  if (!AI_ON) return toast("Wander is off in preview mode.");
+  if (S.chatAIBusy) return toast("Wander is still busy with the last one.");
+  S.chatAIBusy = true; toast(busyMsg || "Wander is typing…");
+  try { await ai(task, { ...payload, trips: tripCtx(), recent: recentCtx(), askerName: S.me.name }); }
+  catch (err) { toast(err.message); } finally { S.chatAIBusy = false; }
+}
+const COMMANDS = [
+  { cmd: "/poll", args: "Question | option | option", desc: "Live poll everyone can vote on", run: a => { const [q, ...o] = parseOpts(a); if (!q || o.length < 2) return toast("Try: /poll Where first? | Goa | Coorg | Pondy"); return postChat({ kind: "poll", body: q.slice(0, 200), data: { q: q.slice(0, 200), options: o.slice(0, 8).map(x => x.slice(0, 60)) } }); } },
+  { cmd: "/ask", args: "your question", desc: "Ask Wander (AI) in the chat", ai: true, run: a => { if (!a) return toast("Try: /ask best sunset spot in Bali?"); const replyText = replyTo ? snippet(msgById(replyTo)) : ""; sendChat("@wander " + a); askWander("chat", { question: a, replyText }); } },
+  { cmd: "/aipoll", args: "topic", desc: "Wander writes a poll for you", ai: true, run: a => askWander("aipoll", { topic: a || "our trip" }, "Wander is cooking up a poll…") },
+  { cmd: "/roast", args: "(optional) who or what", desc: "Wander playfully roasts the plan", ai: true, run: a => askWander("roast", { target: a || "the crew's planning so far" }, "Wander is sharpening the jokes…") },
+  { cmd: "/pick", args: "a | b | c   (blank = a crew member)", desc: "Let fate pick for you", run: a => { let from = parseOpts(a); if (!from.length) from = [...new Set([S.me.id, ...Object.keys(S.profiles)])].map(id => who(id).name); if (from.length < 2) return toast("Give at least two options: /pick pizza | biryani"); const value = from[Math.floor(Math.random() * from.length)]; return postChat({ kind: "card", body: "Picked " + value, data: { type: "pick", from: from.slice(0, 12), value, label: "/pick" } }); } },
+  { cmd: "/roll", args: "(sides, default 6)", desc: "Roll a dice", run: a => { const sides = Math.min(1000, Math.max(2, parseInt(a) || 6)); const value = 1 + Math.floor(Math.random() * sides); return postChat({ kind: "card", body: `Rolled ${value} (d${sides})`, data: { type: "roll", sides, value, label: "/roll" } }); } },
+  { cmd: "/coin", args: "", desc: "Flip a coin", run: () => { const value = Math.random() < .5 ? "Heads" : "Tails"; return postChat({ kind: "card", body: value, data: { type: "coin", value, label: "/coin" } }); } },
+  { cmd: "/split", args: "amount [people]", desc: "Split a bill evenly", run: a => { const [amt, n0] = a.replace(/[₹,]/g, "").split(/\s+/).map(Number); const n = n0 || Math.max(2, Object.keys(S.profiles).length || S.form.people); if (!amt) return toast("Try: /split 12400 4"); return postChat({ kind: "card", body: `${inr(amt)} split ${n} ways`, data: { type: "split", total: amt, n, each: Math.ceil(amt / n), label: "/split" } }); } },
+  { cmd: "/countdown", args: "", desc: "Days until the top trip", run: () => { const t = [...S.trips].sort((a, b) => voteCount(b.id) - voteCount(a.id))[0]; const date = t ? t.form.start : S.form.start; const what = t ? (DEST[t.dest_key]?.name || "the trip") : "the trip"; const days = Math.max(0, Math.ceil((new Date(date + "T00:00:00") - new Date()) / 86400000)); return postChat({ kind: "card", body: `${days} days until ${what}`, data: { type: "countdown", days, date, what, label: "/countdown" } }); } },
+  { cmd: "/trip", args: "", desc: "Share the leading trip", run: () => { const t = [...S.trips].sort((a, b) => voteCount(b.id) - voteCount(a.id))[0]; if (!t) return toast("No trips on the board yet."); return postChat({ kind: "card", body: "Leading trip: " + DEST[t.dest_key]?.name, data: { type: "trip", id: t.id, name: DEST[t.dest_key]?.name, days: t.form?.days, total: t.total, votes: voteCount(t.id), label: "/trip" } }); } },
+  { cmd: "/help", args: "", desc: "Show all commands", run: () => openCmdMenu("/") },
+];
+let cmdSel = 0;
+function openCmdMenu(text) {
+  const menu = $("#cmdMenu"); const q = text.split(/\s/)[0].toLowerCase();
+  const list = COMMANDS.filter(c => (!c.ai || AI_ON) && c.cmd.startsWith(q === "/help" ? "/" : q));
+  if (!text.startsWith("/") || text.includes(" ") || !list.length) { menu.hidden = true; return; }
+  cmdSel = Math.min(cmdSel, list.length - 1);
+  menu.innerHTML = list.map((c, i) => `<button type="button" role="option" aria-selected="${i === cmdSel}" data-cmd="${c.cmd}"><code>${c.cmd}</code><b>${esc(c.desc)}${c.ai ? " ✨" : ""}</b><span>${esc(c.args || "no arguments")}</span></button>`).join("");
+  menu.hidden = false;
+}
+$("#chatInput").addEventListener("input", e => { cmdSel = 0; openCmdMenu(e.target.value); });
+$("#chatInput").addEventListener("keydown", e => {
+  const menu = $("#cmdMenu"); if (menu.hidden) return;
+  const items = $$("button", menu);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); cmdSel = (cmdSel + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; openCmdMenu($("#chatInput").value); }
+  if (e.key === "Tab" || (e.key === "Enter" && items[cmdSel] && !$("#chatInput").value.includes(" "))) { e.preventDefault(); items[cmdSel] && items[cmdSel].click(); }
+  if (e.key === "Escape") menu.hidden = true;
+});
+$("#cmdMenu").addEventListener("click", e => { const b = e.target.closest("[data-cmd]"); if (!b) return; const c = COMMANDS.find(x => x.cmd === b.dataset.cmd); const i = $("#chatInput"); $("#cmdMenu").hidden = true; if (!c.args) { i.value = ""; c.run(""); } else { i.value = c.cmd + " "; i.focus(); } });
+
+$("#chatForm").onsubmit = async e => {
+  e.preventDefault(); const i = $("#chatInput"); const t = i.value.trim(); if (!t) return; i.value = ""; $("#cmdMenu").hidden = true;
+  if (t.startsWith("/")) {
+    const [c0, ...rest] = t.split(" "); const c = COMMANDS.find(x => x.cmd === c0.toLowerCase());
+    if (!c) return toast(`Unknown command ${c0}. Type / to see them all.`);
+    if (c.ai && !AI_ON) return toast("Wander is off in preview mode.");
+    return c.run(rest.join(" ").trim());
+  }
+  const replyText = replyTo ? snippet(msgById(replyTo)) : "";
+  await sendChat(t);
+  if (/^@wander\b/i.test(t)) return askWander("chat", { question: t.replace(/^@wander\b[:,]?\s*/i, ""), replyText });
+  maybeSurprise();
 };
+
+/* ---- surprises: rare, cheap, and often free */
+function maybeSurprise() {
+  const humans = S.chat.filter(m => m.kind === "msg" && !asWander(m));
+  const lastW = [...S.chat].reverse().find(m => asWander(m));
+  const sinceW = lastW ? S.chat.filter(m => new Date(m.created_at) > new Date(lastW.created_at) && m.kind === "msg" && !asWander(m)).length : humans.length;
+  const minutes = lastW ? (Date.now() - new Date(lastW.created_at)) / 60000 : 999;
+  if (sinceW < 8 || minutes < 20 || Math.random() > 0.3) return;
+  const freeOptions = [];
+  const t = [...S.trips].sort((a, b) => voteCount(b.id) - voteCount(a.id));
+  if (t.length >= 2) freeOptions.push(() => postChat({ kind: "poll", body: "Wander's pop poll", data: { wander: true, label: "surprise", q: "Pop poll: if we had to book TONIGHT, which one?", options: t.slice(0, 4).map(x => DEST[x.dest_key]?.name || x.dest_key) } }));
+  if (t.length) freeOptions.push(() => { const days = Math.max(0, Math.ceil((new Date(t[0].form.start + "T00:00:00") - new Date()) / 86400000)); return postChat({ kind: "card", body: `${days} days to go`, data: { wander: true, label: "surprise", type: "countdown", days, date: t[0].form.start, what: DEST[t[0].dest_key]?.name || "the trip" } }); });
+  freeOptions.push(() => { const names = [...new Set([S.me.id, ...Object.keys(S.profiles)])].map(id => who(id).name); const chores = ["books the flights", "makes the packing list", "finds the best street food", "is in charge of the playlist", "carries the power bank"]; const value = names[Math.floor(Math.random() * names.length)]; return postChat({ kind: "card", body: "Surprise assignment", data: { wander: true, label: "surprise", type: "pick", from: names, value: `${value} ${chores[Math.floor(Math.random() * chores.length)]}` } }); });
+  if (AI_ON && Math.random() < 0.4) askWander("surprise", {}, "✨ Wander has something to say…");
+  else freeOptions[Math.floor(Math.random() * freeOptions.length)]();
+}
 
 const IDEA_COLORS = ["#FFD23F", "#7FE0D0", "#FFB4C6", "#B9B0FF", "#FFC07A", "#A8E6A1"];
 const ideaVotes = id => S.ideaVotes.filter(v => v.idea_id === id).length;
@@ -788,6 +925,16 @@ $("#aiIdeas").onclick = async e => {
   try { await ai("ideas", { dests: [...new Set(S.trips.map(t => DEST[t.dest_key]?.name))].join(", "), existing: S.ideas.map(i => i.body).slice(0, 25) }); }
   catch (err) { toast(err.message); } finally { btn.disabled = false; btn.textContent = "✨ Ask Wander for 5 wild ideas"; }
 };
+function armReset(btn, label, fn) {
+  let armed = false, timer;
+  btn.onclick = async () => {
+    if (!armed) { armed = true; btn.textContent = "Tap again to confirm"; timer = setTimeout(() => { armed = false; btn.textContent = label; }, 4000); return; }
+    clearTimeout(timer); armed = false; btn.disabled = true;
+    try { await fn(); toast("Done. Fresh start ✨"); } catch (e) { toast(e.message); } finally { btn.disabled = false; btn.textContent = label; }
+  };
+}
+armReset($("#resetIdeas"), "🧹 Reset board", async () => { await DB.clear("ideas"); reload("ideas"); reload("idea_votes"); });
+armReset($("#resetChat"), "🧹 Reset chat", async () => { await DB.clear("chat_messages"); reload("chat_messages"); reload("poll_votes"); });
 $("#crewSeg").onclick = e => {
   const b = e.target.closest("[data-seg]"); if (!b) return; S.crewSeg = b.dataset.seg;
   $$("#crewSeg [data-seg]").forEach(x => x.setAttribute("aria-selected", x === b));

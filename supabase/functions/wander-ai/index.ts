@@ -79,6 +79,8 @@ async function claude(prompt: string, opts: { maxTokens?: number } = {}) {
 
 const S = (v: unknown, n = 300) => String(v ?? "").slice(0, n);
 const N = (v: unknown) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : 0);
+const tripLine = (p: any) => (p.trips || []).slice(0, 5).map((t: any) => `${S(t.name, 50)} ${N(t.days)}d ₹${N(t.total)}pp`).join("; ") || "none yet";
+const recentLines = (p: any) => (p.recent || []).slice(-6).map((m: any) => `${S(m.who, 30)}: ${S(m.text, 160)}`).join("\n");
 
 // ---------------------------------------------------------------- tasks
 const tasks: Record<string, (p: any, ctx: Ctx) => Promise<unknown>> = {
@@ -123,8 +125,40 @@ Trips on their board: ${trips || "none yet"}.
 Recent chat:
 ${recent}
 
-${S(p.askerName, 30) || "Someone"} asks you: ${S(p.question, 600)}`, { maxTokens: 220 });
+${p.replyText ? `(They're replying to: "${S(p.replyText, 200)}")\n` : ""}${S(p.askerName, 30) || "Someone"} asks you: ${S(p.question, 600)}`, { maxTokens: 220 });
     const { error } = await ctx.admin.from("chat_messages").insert({ user_id: null, kind: "ai", body: text.slice(0, 1990) });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  },
+
+  async aipoll(p, ctx) {
+    const out = extractJSON(await claude(`Write one fun, useful poll for the crew about: ${S(p.topic, 200)}. Trips on their board: ${tripLine(p)}. 3 or 4 short options (max 5 words each).
+Reply with only JSON: {"q":"question under 12 words","options":["...","..."]}`, { maxTokens: 160 }));
+    const options = (Array.isArray(out.options) ? out.options : []).map((o: unknown) => S(o, 60)).filter(Boolean).slice(0, 6);
+    if (!out.q || options.length < 2) throw new Error("Wander's poll came out wonky. Try again.");
+    const { error } = await ctx.admin.from("chat_messages").insert({ user_id: null, kind: "poll", body: S(out.q, 200), data: { q: S(out.q, 200), options, label: "/aipoll" } });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  },
+
+  async roast(p, ctx) {
+    const text = await claude(`Playfully roast ${S(p.target, 120)} in under 45 words. Teasing, never mean, no insults about appearance, money troubles or identity. Context: trips on their board: ${tripLine(p)}. Recent chat:
+${recentLines(p)}`, { maxTokens: 160 });
+    const { error } = await ctx.admin.from("chat_messages").insert({ user_id: null, kind: "ai", body: text.slice(0, 600), data: { label: "/roast" } });
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  },
+
+  async surprise(p, ctx) {
+    const out = extractJSON(await claude(`Drop a fun surprise into the crew's chat. Trips on their board: ${tripLine(p)}. Recent chat:
+${recentLines(p)}
+Pick ONE: a surprising true fact about one of their destinations, a quick 2-4 option poll, or a silly mini-challenge for the trip. Under 35 words.
+Reply with only JSON: {"type":"fact|poll|challenge","text":"...","q":"(poll only)","options":["(poll only)"]}`, { maxTokens: 180 }));
+    const isPoll = out.type === "poll" && Array.isArray(out.options) && out.options.length >= 2;
+    const row = isPoll
+      ? { user_id: null, kind: "poll", body: S(out.q || out.text, 200), data: { q: S(out.q || out.text, 200), options: out.options.map((o: unknown) => S(o, 60)).slice(0, 4), label: "surprise" } }
+      : { user_id: null, kind: "ai", body: (out.type === "challenge" ? "🎯 Challenge: " : "💡 ") + S(out.text, 400), data: { label: "surprise" } };
+    const { error } = await ctx.admin.from("chat_messages").insert(row);
     if (error) throw new Error(error.message);
     return { ok: true };
   },
