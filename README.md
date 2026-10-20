@@ -20,8 +20,8 @@ Open the app → **Crew** tab → **Crew access** (admins only) → add their Go
 
 ## Settings you might change
 
-- **AI daily cap per person**: Supabase → Edge Functions → Secrets → `AI_DAILY_LIMIT` (default 60)
-- **AI models**: secrets `ANTHROPIC_MODEL` (itineraries) and `ANTHROPIC_FAST_MODEL` (chat, picks, games)
+- **AI daily cap per person**: Supabase → Edge Functions → Secrets → `AI_DAILY_LIMIT` (default 20)
+- **AI model**: everything uses the lightest Claude model (Haiku). Override with the `ANTHROPIC_MODEL` secret
 - **Prices and destinations**: edit `data/destinations.js`; each row documents its fields at the top of the file
 
 ## Preview locally

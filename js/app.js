@@ -288,7 +288,8 @@ function runPlan(userAction) {
   if (userAction) {
     $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
     presence({ doing: "Browsing destinations" });
-    if (AI_ON) askAIPicks();
+    const cached = store.get("aiPicks", {})[JSON.stringify(f)];
+    if (cached) { S.ai = cached; renderResults(); }
   }
 }
 function roastTemplate(f, rec) {
@@ -335,7 +336,8 @@ function renderResults() {
   const box = $("#results"), rec = S.rec, f = S.recForm;
   if (!rec) { box.innerHTML = ""; return; }
   const roast = (S.ai && S.ai.roast) || roastTemplate(f, rec);
-  let html = `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says${S.aiBusy ? " · thinking…" : ""}</div><p>${esc(roast)}</p></div></div>`;
+  const askBtn = AI_ON && !S.ai && !S.aiBusy ? `<button class="btn small" id="askPicks" type="button" style="margin-top:8px">✨ Get Wander's take on these</button>` : "";
+  let html = `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says${S.aiBusy ? " · thinking…" : ""}</div><p>${esc(roast)}</p>${askBtn}</div></div>`;
   if (rec.reality) {
     const x = rec.reality;
     const btns = [];
@@ -378,6 +380,7 @@ function renderResults() {
   box.innerHTML = html; hydrateAll(box);
 }
 $("#results").addEventListener("click", e => {
+  if (e.target.closest("#askPicks")) return askAIPicks();
   const m = e.target.closest("[data-more]");
   if (m) { const r = m.dataset.more; const list = S.rec.ok.filter(x => x.dest.region === r); $(`[data-region-grid="${r}"]`).innerHTML = list.map(x => card(x)).join(""); m.remove(); hydrateAll($("#results")); return; }
   const fx = e.target.closest("[data-fix]");
@@ -394,7 +397,7 @@ $("#results").addEventListener("click", e => {
 
 async function askAIPicks() {
   const rec = S.rec, f = formLabels(S.recForm);
-  const cands = (rec.reality ? [...rec.reality.elsewhere, ...rec.nope.slice(0, 6)] : rec.ok.slice(0, 16)).map(e => ({
+  const cands = (rec.reality ? [...rec.reality.elsewhere, ...rec.nope.slice(0, 6)] : rec.ok.slice(0, 10)).map(e => ({
     key: e.key, name: e.dest.name, country: e.dest.country, typical: e.typical, low: e.low, high: e.high, verdict: e.verdict, season: e.season, visaNote: e.dest.visaNote, famous: e.dest.famous,
   }));
   const reality = rec.reality ? `cheapest real option ${rec.reality.cheapest?.dest.name} ≈ ₹${rec.reality.cheapest?.typical}; ${rec.reality.lowerStyle ? "at " + STYLES[rec.reality.lowerStyle.style].name + " level " + rec.reality.lowerStyle.example.dest.name + " ≈ ₹" + rec.reality.lowerStyle.example.typical : "no cheaper style works either"}` : "";
@@ -404,6 +407,7 @@ async function askAIPicks() {
     const out = await ai("picks", { form: f, candidates: cands, reality });
     if (JSON.stringify(S.recForm) !== stamp) return;
     S.ai = { roast: String(out.roast || ""), picks: (out.picks || []).filter(p => p && DEST[p.key]).map(p => ({ key: p.key, line: String(p.line || ""), catch: String(p.catch || "") })) };
+    const c = store.get("aiPicks", {}); const keys = Object.keys(c); if (keys.length > 15) delete c[keys[0]]; c[stamp] = S.ai; store.set("aiPicks", c);
   } catch (err) { toast(err.message); }
   finally { S.aiBusy = false; renderResults(); }
 }
@@ -637,7 +641,7 @@ function tripHTML(t) {
   <div id="gal"><div class="skel" style="aspect-ratio:3/2;max-width:540px"></div></div>
   <div><div class="eyebrow">${preview ? "Instant plan · not saved yet" : `${auto ? "Planned" : "Wander-polished plan"} by ${esc(who(t.created_by).name)} · ${esc(ago(t.created_at))}`} · ${esc(STYLES[f.style]?.name || "")}</div><h2 class="section" style="font-size:26px;margin-top:4px">${esc(p.headline || "")}</h2></div>
   ${p.wanderSays ? `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says</div><p>${esc(p.wanderSays)}</p></div></div>` : ""}
-  ${auto && AI_ON ? `<div class="card flat" id="polishBox"><div class="vs" style="justify-content:space-between"><div><b>Want hand-picked hotels and restaurants?</b><div class="small muted">${polished ? "Someone already had Wander polish this exact trip." : "Wander writes a detailed version with named places. Uses AI credits (about ₹2–3), takes ~30s, and the whole crew can reuse it."}</div></div><button class="btn small go" id="polishBtn" type="button">${polished ? "Open Wander's version" : "✨ Ask Wander to polish"}</button></div></div>` : ""}
+  ${auto && AI_ON ? `<div class="card flat" id="polishBox"><div class="vs" style="justify-content:space-between"><div><b>Want hand-picked hotels and restaurants?</b><div class="small muted">${polished ? "Someone already had Wander polish this exact trip." : "Wander names specific hotels and restaurants. Uses a little AI credit (about ₹1), takes ~20s, and the whole crew can reuse it."}</div></div><button class="btn small go" id="polishBtn" type="button">${polished ? "Open Wander's version" : "✨ Ask Wander to polish"}</button></div></div>` : ""}
   ${p.fitsBudget === false || p.tradeoffs ? `<div class="banner">${p.fitsBudget === false ? "<b>Heads up:</b> this plan runs over the budget. " : ""}${esc(p.tradeoffs || "")}</div>` : ""}
   ${(p.speciality || []).length ? `<div class="card"><h3>Famous for</h3><div class="chips">${p.speciality.map(s => `<a class="chip" href="${esc(G.search(s + " " + city))}" target="_blank" rel="noopener">${esc(s)}</a>`).join("")}</div></div>` : ""}
   <div class="flight"><div><div class="code">${esc(f.from)}</div><div class="small">${esc(ORIGINS[f.from]?.name || "")}</div></div><div class="mid">${gt.mode === "train" ? "🚆" : gt.mode === "road" ? "🚗" : "✈"}<br>${esc((gt.options || [])[0] || "")}</div><div class="end"><div class="code">${esc(d.iata)}</div><div class="small">${esc(d.name.split(/[,&]/)[0])}</div></div></div>
@@ -760,9 +764,11 @@ $("#chatForm").onsubmit = async e => {
   await sendChat(t);
   if (/^@wander\b/i.test(t)) {
     if (!AI_ON) return toast("Wander is off in preview mode.");
+    if (S.chatAIBusy) return toast("Wander is still answering the last one.");
+    S.chatAIBusy = true;
     const recent = S.chat.slice(-14).map(m => ({ who: who(m.user_id).name, text: m.body }));
     const trips = S.trips.slice(0, 6).map(x => ({ name: DEST[x.dest_key]?.name, days: x.form?.days, total: x.total, votes: voteCount(x.id) }));
-    ai("chat", { question: t.replace(/^@wander\b[:,]?\s*/i, ""), recent, trips, askerName: S.me.name }).catch(err => toast(err.message));
+    ai("chat", { question: t.replace(/^@wander\b[:,]?\s*/i, ""), recent: recent.slice(-6), trips, askerName: S.me.name }).catch(err => toast(err.message)).finally(() => { S.chatAIBusy = false; });
   }
 };
 
@@ -863,7 +869,7 @@ function renderQuizBoard() { const el = $("#quizLB"); if (el) el.innerHTML = lbH
 function renderQuiz() {
   const box = $("#game-quiz"); const q = S.games.quiz;
   if (!q || !Array.isArray(q.questions) || !q.questions.length) {
-    box.innerHTML = `${backBtn}<div><div class="eyebrow">Multiplayer trivia</div><h2 class="section">Passport Quiz</h2></div><div class="card"><p style="margin:0">Wander writes 7 questions about places on your shortlist. Everyone plays the same round; the leaderboard updates live. Faster right answers score more.</p>${AI_ON ? `<button class="btn primary" id="newQuiz" type="button">🧭 Start a round</button>` : `<div class="banner">Needs Wander (AI) to write questions.</div>`}</div>`;
+    box.innerHTML = `${backBtn}<div><div class="eyebrow">Multiplayer trivia</div><h2 class="section">Passport Quiz</h2></div><div class="card"><p style="margin:0">Wander writes 5 questions about places on your shortlist. Everyone plays the same round; the leaderboard updates live. Faster right answers score more.</p>${AI_ON ? `<button class="btn primary" id="newQuiz" type="button">🧭 Start a round</button>` : `<div class="banner">Needs Wander (AI) to write questions.</div>`}</div>`;
     const nq = $("#newQuiz"); if (nq) nq.onclick = newQuiz; return;
   }
   if (qLocal.round !== q.roundId) { const mine = quizMoves().find(m => m.user_id === S.me.id); qLocal = { round: q.roundId, i: mine ? num(mine.data.done) : 0, score: mine ? num(mine.data.score) : 0, t0: 0, timer: null, answered: null }; }
