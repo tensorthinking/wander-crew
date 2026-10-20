@@ -13,7 +13,7 @@ const json = (body: unknown, status = 200) =>
 
 // One model for everything: the lightest Claude. Override with the ANTHROPIC_MODEL secret if ever needed.
 const MODEL = Deno.env.get("ANTHROPIC_MODEL") || "claude-haiku-5-5";
-const LIMIT = Number(Deno.env.get("AI_DAILY_LIMIT") || 20);
+const LIMIT = Number(Deno.env.get("AI_DAILY_LIMIT") || 100);
 
 const PERSONA = `You are Wander, the witty, slightly sarcastic AI travel buddy in "Wander Crew", a trip planner for Indian friends. Be realistic about money; use only real, well-known places (if unsure, name the area instead). Prices in ₹ per person. Be brief. Today: ${new Date().toISOString().slice(0, 10)}.`;
 
