@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Wander Crew</title>
+<meta name="description" content="Plan trips with your friends: realistic budgets, AI itineraries, live chat and games.">
+<meta name="theme-color" content="#EAF2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0C1424" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23FF9A1F'/%3E%3Cpath d='M14 36l36-14-10 28-7-10-10 6 3-9z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bagel+Fat+One&family=Figtree:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ============ auth gate ============ -->
+<section id="gate" class="gate" hidden>
+  <div class="gate-card">
+    <div class="logo big"><span class="stamp" aria-hidden="true">✈</span><span>Wander<span class="w2">Crew</span></span></div>
+    <p class="gate-sub" id="gateMsg">The trip planner for your friend circle. Realistic budgets, an AI with opinions, and a group chat that actually ends in a booking.</p>
+    <button class="btn primary block" id="googleBtn" type="button">
+      <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+      Continue with Google
+    </button>
+    <button class="btn block" id="signOutGate" type="button" hidden>Sign out</button>
+    <p class="small muted" id="gateFoot">Only people on the crew list can get in.</p>
+  </div>
+</section>
+
+<!-- ============ app ============ -->
+<div id="app" hidden>
+<header class="top">
+  <div class="wrap">
+    <div class="logo"><span class="stamp" aria-hidden="true">✈</span><span>Wander<span class="w2">Crew</span></span></div>
+    <button class="online-strip" id="onlineStrip" type="button" aria-label="See who's online">
+      <span class="dot" aria-hidden="true"></span><span class="count" id="onlineCount">Just you</span>
+      <span class="faces" id="onlineFaces"></span>
+    </button>
+    <button class="me-btn" id="meBtn" type="button" aria-label="Account"><img id="meAvatar" alt=""></button>
+  </div>
+</header>
+<div class="wrap" id="previewBanner" hidden><div class="banner" style="margin-top:12px">Preview mode: everything stays in this browser and Wander (the AI) is switched off. Add your Supabase keys to <code>js/config.js</code> to go live.</div></div>
+
+<main>
+  <!-- PLAN -->
+  <section class="view wrap" id="view-plan" aria-label="Plan">
+    <form class="hero" id="planForm" novalidate>
+      <div>
+        <div class="eyebrow">Where should the crew go?</div>
+        <h1 class="section">Set a budget. We'll check it against reality.</h1>
+      </div>
+
+      <div class="field">
+        <div class="budget-read"><label for="budget">Budget per person, all-in</label>
+          <span class="budget-edit">₹<input id="budgetNum" type="number" inputmode="numeric" min="5000" max="1500000" step="1000" aria-label="Budget in rupees"></span></div>
+        <input type="range" id="budget" min="0" max="100" step="1" aria-label="Budget slider">
+        <div class="scale small muted"><span>₹5k</span><span>₹50k</span><span>₹2L</span><span>₹5L</span><span>₹15L</span></div>
+      </div>
+
+      <div class="field"><span class="lbl">Travel style</span>
+        <div class="styles" id="styles" role="radiogroup" aria-label="Travel style"></div>
+      </div>
+
+      <div class="row2">
+        <div class="field"><span class="lbl" id="daysLbl">Days</span>
+          <div class="stepper" role="group" aria-labelledby="daysLbl"><button type="button" data-step="days:-1" aria-label="Fewer days">−</button><output id="daysOut">6</output><button type="button" data-step="days:1" aria-label="More days">+</button></div>
+        </div>
+        <div class="field"><span class="lbl" id="peopleLbl">Travellers</span>
+          <div class="stepper" role="group" aria-labelledby="peopleLbl"><button type="button" data-step="people:-1" aria-label="Fewer travellers">−</button><output id="peopleOut">4</output><button type="button" data-step="people:1" aria-label="More travellers">+</button></div>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field"><label for="start">Start date</label><input type="date" id="start"></div>
+        <div class="field"><label for="from">Leaving from</label><select id="from"></select></div>
+      </div>
+
+      <div class="field"><span class="lbl">Where in the world? <span class="muted">Pick one or more</span></span>
+        <div class="chips" id="regions"></div>
+      </div>
+      <div class="field"><span class="lbl">What's the vibe? <span class="muted">Pick any</span></span>
+        <div class="chips" id="vibes"></div>
+      </div>
+      <button class="btn primary block" id="findBtn" type="submit"><span class="plane">✈</span> Find our destinations</button>
+      <p class="note small"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg><span>Costs come from Wander Crew's cost model (fares, daily spend by style, visas, season), so they're estimates. Every hotel and place links to Google so you can check live prices.</span></p>
+    </form>
+
+    <div id="results" class="results"></div>
+  </section>
+
+  <!-- TRIPS -->
+  <section class="view wrap" id="view-trips" aria-label="Trips" hidden>
+    <div><div class="eyebrow">Shared with the crew</div><h2 class="section">Trip board</h2>
+      <p class="muted" style="margin:6px 0 0">Every itinerary anyone builds lands here. Vote for the one you'd actually pay for.</p></div>
+    <div id="tripList" class="stack"></div>
+  </section>
+
+  <!-- CREW -->
+  <section class="view wrap" id="view-crew" aria-label="Crew" hidden>
+    <div><div class="eyebrow">The crew</div><h2 class="section">Who's around</h2></div>
+    <div class="people" id="people"></div>
+    <div class="segment" role="tablist" id="crewSeg">
+      <button role="tab" aria-selected="true" data-seg="chat" type="button">Group chat</button>
+      <button role="tab" aria-selected="false" data-seg="ideas" type="button">Idea board</button>
+      <button role="tab" aria-selected="false" data-seg="access" type="button" id="accessTab" hidden>Crew access</button>
+    </div>
+    <div id="seg-chat" class="card chat-card">
+      <div class="chat" id="chat" aria-live="polite"></div>
+      <div class="react-row" aria-label="Send a reaction to everyone online">
+        <button type="button" data-react="🔥" aria-label="Fire">🔥</button><button type="button" data-react="🏝️" aria-label="Island">🏝️</button><button type="button" data-react="✈️" aria-label="Plane">✈️</button><button type="button" data-react="😂" aria-label="Laugh">😂</button><button type="button" data-react="💸" aria-label="Money">💸</button><button type="button" data-react="🙄" aria-label="Eye roll">🙄</button>
+      </div>
+      <form class="composer" id="chatForm">
+        <input type="text" id="chatInput" maxlength="600" placeholder="Message the crew. Start with @wander to ask the AI." autocomplete="off" aria-label="Message">
+        <button class="btn go" type="submit">Send</button>
+      </form>
+    </div>
+    <div id="seg-ideas" class="stack" hidden>
+      <form class="composer" id="ideaForm">
+        <input type="text" id="ideaInput" maxlength="220" placeholder="Drop an idea: sunrise trek? karaoke night?" autocomplete="off" aria-label="New idea">
+        <button class="btn go" type="submit">Stick it</button>
+      </form>
+      <button class="btn small ai-only" id="aiIdeas" type="button">✨ Ask Wander for 5 wild ideas</button>
+      <div class="board" id="board"></div>
+    </div>
+    <div id="seg-access" class="stack" hidden>
+      <div class="card">
+        <h3>Who can log in</h3>
+        <p class="small muted" style="margin:0">Add a friend's email (the one they use for Google). They can sign in right away.</p>
+        <form class="composer" id="accessForm">
+          <input type="email" id="accessInput" placeholder="friend@gmail.com" autocomplete="off" aria-label="Friend's email" required>
+          <button class="btn go" type="submit">Add</button>
+        </form>
+        <div id="accessList" class="stack"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GAMES -->
+  <section class="view wrap" id="view-games" aria-label="Games" hidden>
+    <div id="gameHome" class="stack">
+      <div><div class="eyebrow">Play together, live</div><h2 class="section">Game room</h2></div>
+      <div class="game-cards">
+        <button class="gcard" data-game="spin" type="button" style="background:#FFD23F"><span class="big" aria-hidden="true">🎡</span><h3>Spin the Globe</h3><p>Let fate pick from your shortlist. Everyone sees the same spin.</p></button>
+        <button class="gcard" data-game="quiz" type="button" style="background:#7FE0D0"><span class="big" aria-hidden="true">🧭</span><h3>Passport Quiz</h3><p>Wander writes the questions. Fast right answers score more.</p></button>
+        <button class="gcard" data-game="tot" type="button" style="background:#FFB4C6"><span class="big" aria-hidden="true">⚖️</span><h3>This or That</h3><p>Travel dilemmas. Watch the crew split, live.</p></button>
+      </div>
+    </div>
+    <div id="game-spin" class="stack" hidden></div>
+    <div id="game-quiz" class="stack" hidden></div>
+    <div id="game-tot" class="stack" hidden></div>
+  </section>
+</main>
+
+<nav class="tabs" aria-label="Sections">
+  <div class="wrap" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="plan" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>Plan</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="trips" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16v12H4zM9 7V5h6v2"/><path d="M4 12h16"/></svg>Trips<span class="badge" id="tripBadge" hidden></span></button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="crew" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16 14.5a5 5 0 0 1 6 5"/></svg>Crew<span class="badge" id="chatBadge" hidden></span></button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="games" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="7" width="19" height="11" rx="5"/><path d="M7 11v3M5.5 12.5h3M15.5 12h.01M18 13.5h.01"/></svg>Games</button>
+  </div>
+</nav>
+</div>
+
+<div class="sheet" id="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="panel" id="sheetPanel"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="js/config.js"></script>
+<script src="data/destinations.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

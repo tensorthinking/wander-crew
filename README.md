@@ -1,0 +1,31 @@
+# Wander Crew ✈
+
+A fun, realistic trip planner for a friend circle. Pick a budget, travel style, days and regions (India included). A cost model checks what's actually affordable, and Wander, the slightly sarcastic AI, writes the plan. Every hotel, restaurant and sight links to Google Maps.
+
+**Live:** https://tensorthinking.github.io/wander-crew/
+
+## What's inside
+
+| Part | Where | What it does |
+|---|---|---|
+| Front end | `index.html`, `styles.css`, `js/app.js` | Static site on GitHub Pages |
+| Cost model | `data/destinations.js`, `js/engine.js` | ~100 destinations across 12 regions; fares by home city and month, daily spend by travel style, visas, seasons |
+| Backend | Supabase project `wander-crew` | Google login, crew allowlist, trips, votes, chat, ideas, games, realtime presence |
+| AI | `supabase/functions/wander-ai` | Edge function that holds the Anthropic key, checks the allowlist, caps usage per person per day |
+| Database | `supabase/schema.sql` | Tables plus row-level security: nothing is readable unless your email is on `crew_allowlist` |
+
+## Adding friends
+
+Open the app → **Crew** tab → **Crew access** (admins only) → add their Google email. They can sign in immediately.
+
+## Settings you might change
+
+- **AI daily cap per person**: Supabase → Edge Functions → Secrets → `AI_DAILY_LIMIT` (default 60)
+- **AI models**: secrets `ANTHROPIC_MODEL` (itineraries) and `ANTHROPIC_FAST_MODEL` (chat, picks, games)
+- **Prices and destinations**: edit `data/destinations.js`; each row documents its fields at the top of the file
+
+## Preview locally
+
+Blank out the two values in `js/config.js` and open `index.html` through any static server (`npx serve .`). Data then stays in your browser and the AI is off.
+
+Prices are planning estimates, not quotes. Always check the live links before paying.
