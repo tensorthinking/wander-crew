@@ -16,7 +16,7 @@ const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const inr = n => "₹" + Math.round(num(n)).toLocaleString("en-IN");
 const lakh = n => { n = num(n); if (n >= 100000) return "₹" + parseFloat((n / 100000).toFixed(n >= 1000000 ? 1 : 2)) + "L"; if (n >= 1000) return "₹" + Math.round(n / 1000) + "k"; return "₹" + Math.round(n); };
 const fmtDate = (iso, o = { day: "numeric", month: "short", year: "numeric" }) => { try { return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", o); } catch { return iso; } };
-const addDays = (iso, d) => { const t = new Date(iso + "T00:00:00"); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); };
+const addDays = (iso, d) => { const [y, m, dd] = String(iso).split("-").map(Number); return new Date(Date.UTC(y, (m || 1) - 1, (dd || 1) + d)).toISOString().slice(0, 10); };
 const ago = t => { const s = (Date.now() - new Date(t).getTime()) / 1000; if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + "m ago"; if (s < 86400) return Math.floor(s / 3600) + "h ago"; return Math.floor(s / 86400) + "d ago"; };
 const store = { get(k, d) { try { const v = localStorage.getItem("wc:" + k); return v ? JSON.parse(v) : d; } catch { return d; } }, set(k, v) { try { localStorage.setItem("wc:" + k, JSON.stringify(v)); } catch {} } };
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
@@ -453,31 +453,135 @@ async function openDest(key) {
     </div></div>
     ${splitCard(e.breakdown, f.budget, `${STYLES[e.style].name} estimate, ${f.days} days`, `Wander Crew's cost model for ${f.people} sharing, ${E.MONTHS[e.month - 1]} fares from ${ORIGINS[f.from].name}. Check live prices with the links.`)}
     ${saved.length ? `<div class="card flat"><div class="eyebrow">Already on the trip board</div><div class="btnrow">${saved.map(t => `<button class="btn small" data-trip="${esc(t.id)}" type="button">${num(t.form?.days)} days · ${lakh(t.total)} · ${esc(who(t.created_by).name)}</button>`).join("")}</div></div>` : ""}
-    <div id="planArea">${AI_ON ? `<button class="btn primary block" id="genPlan" type="button">🗺️ Build our ${f.days}-day itinerary</button><p class="muted small" style="margin:8px 0 0">Wander plans real hotels, restaurants and sights (all linked to Google Maps), the budget split and booking links, then saves it to the trip board. Takes about a minute.</p>` : `<div class="banner">AI itineraries switch on once the app is connected to Supabase with an Anthropic key.</div>`}</div>
+    <div id="planArea"><button class="btn primary block" id="genPlan" type="button">🗺️ Build our ${f.days}-day itinerary</button><p class="muted small" style="margin:8px 0 0">Instant and free: day-by-day sights, live Google searches for hotels and food at your price level, budget split and booking links.</p></div>
   </div>`, "dest");
   galleryHTML(d).then(h => { const g = $("#gal"); if (g) g.innerHTML = h; });
-  const gp = $("#genPlan"); if (gp) gp.onclick = () => buildPlan(d, f, e);
+  const gp = $("#genPlan"); if (gp) gp.onclick = () => previewTrip(d, f, e);
 }
 
-const LOADING = ["Checking how you'll get there", "Scouting neighbourhoods to stay", "Shortlisting hotels that exist", "Hunting down the food", "Plotting day one", "Balancing the budget", "Adding a little sarcasm"];
-async function buildPlan(d, f, e) {
-  const area = $("#planArea"); const ctl = { cancelled: false }; planCtl = ctl;
-  area.innerHTML = `<div class="loading-box card"><div class="globe" aria-hidden="true"></div><h3 id="planStatus">${LOADING[0]}…</h3><p class="muted small" style="margin:0">Wander is writing your itinerary. About a minute.</p></div>`;
-  let i = 0; const tick = setInterval(() => { i = Math.min(i + 1, LOADING.length - 1); const el = $("#planStatus"); if (el) el.textContent = LOADING[i] + "…"; }, 7000);
+/* ------------------------------------------------------------------ instant itinerary (no AI) */
+const STAY_Q = ["hostels", "3 star hotels", "4 star hotels", "5 star hotels"];
+const STAY_LABEL = ["hostels & guesthouses", "3★ hotels & villas", "4★ hotels", "5★ hotels & resorts"];
+function autoPlan(d, f, e) {
+  const P = (window.WC_PLACES || {})[d.key] || { a: [[d.name, []]], e: [] };
+  const D = Math.max(2, num(f.days)), month = E.MONTHS[e.month - 1], seed = Math.abs(hash(d.key + D + f.style));
+  // how many areas fit: roughly one area per 2 days, at least one
+  const areas = P.a.slice(0, Math.max(1, Math.min(P.a.length, Math.round((D - 1) / 2) || 1)));
+  const fullDays = Math.max(0, D - 2);
+  const totalSights = areas.reduce((x, [, s]) => x + Math.max(1, s.length), 0);
+  let alloc = areas.map(([, s]) => Math.max(fullDays ? 1 : 0, Math.round(fullDays * Math.max(1, s.length) / totalSights)));
+  while (alloc.reduce((x, y) => x + y, 0) > fullDays) { const i = alloc.indexOf(Math.max(...alloc)); alloc[i]--; }
+  while (alloc.reduce((x, y) => x + y, 0) < fullDays) { const i = alloc.indexOf(Math.min(...alloc)); alloc[i]++; }
+  const queues = areas.map(([, s]) => [...s]);
+  const dishes = P.e.length ? P.e : ["Local speciality"];
+  let dishI = seed % dishes.length;
+  const nextDish = () => dishes[(dishI++) % dishes.length];
+  const take = ai => queues[ai].length ? queues[ai].shift() : null;
+  const fillers = [["Café-hop and wander", "good coffee and a slow walk"], ["Local market", "snacks and souvenirs at the local market"], ["Sunset spot", "the best sunset view"], ["Free time", "pool, nap or shopping, group's call"]];
+  const slot = (time, ai, fallbackIdx) => {
+    const area = areas[ai][0]; const sight = take(ai);
+    if (sight) return { time, name: sight, area, what: time === "Evening" ? "Go late afternoon and stay for golden hour" : time === "Morning" ? "Go early to beat the crowds" : "Explore at your pace", cost: 0 };
+    const [n, w] = fillers[fallbackIdx % fillers.length]; return { time, name: "", area, what: `${n}: ${w} in ${area}.`, cost: 0 };
+  };
+  const days = []; const dailyPP = Math.round(e.breakdown.food / D + e.breakdown.activities / D + e.breakdown.transport / D);
+  const arrive = e.fl.mode === "road" ? `Drive or bus from ${ORIGINS[f.from].name}` : `Fly ${f.from} → ${d.iata} (~${d.hrs}h)`;
+  // day 1
+  days.push({ day: 1, title: "Arrive and settle in", base: areas[0][0], plan: [
+    { time: "Morning", name: "", area: "", what: `${arrive}, then check in.`, cost: 0 },
+    ...(d.hrs <= 4 || e.fl.mode === "road" ? [slot("Afternoon", 0, 0)] : []),
+    slot("Evening", 0, 2)], eat: [{ name: "Best " + nextDish(), area: areas[0][0] }], costPP: dailyPP });
+  // full days
+  let dayNo = 2;
+  areas.forEach(([area], ai) => {
+    for (let k = 0; k < alloc[ai]; k++) {
+      const first = queues[ai][0];
+      days.push({ day: dayNo, title: first ? `${area}: ${first}${queues[ai][1] ? " & more" : ""}` : `${area} at your own pace`, base: area,
+        plan: [slot("Morning", ai, dayNo), slot("Afternoon", ai, dayNo + 1), slot("Evening", ai, dayNo + 2)],
+        eat: [{ name: "Best " + nextDish(), area }, { name: "Best " + nextDish(), area }], costPP: dailyPP });
+      dayNo++;
+    }
+  });
+  // last day
+  const lastArea = areas[areas.length - 1][0], lastIdx = areas.length - 1;
+  days.push({ day: D, title: "Last bites and head home", base: lastArea, plan: [slot("Morning", lastIdx, 1),
+    { time: "Afternoon", name: "", area: "", what: e.fl.mode === "road" ? `Drive back to ${ORIGINS[f.from].name}.` : `Head to the airport. Flights back to ${f.from}.`, cost: 0 }],
+    eat: [{ name: "Best " + nextDish(), area: lastArea }], costPP: Math.round(dailyPP * 0.6) });
+  // nights per area
+  const nights = areas.map(() => 0); nights[0] += 1;
+  alloc.forEach((n, i) => nights[i] += n);
+  const sumN = nights.reduce((x, y) => x + y, 0); if (sumN > D - 1) nights[nights.length - 1] -= sumN - (D - 1); if (sumN < D - 1) nights[nights.length - 1] += (D - 1) - sumN;
+  const perRoom = Math.round((e.breakdown.stay / Math.max(1, D - 1)) * Math.min(2, num(f.people) || 1));
+  const country = d.domestic ? d.state + ", India" : d.country;
+  const stays = areas.map(([area], i) => ({ area, nights: Math.max(0, nights[i]), why: i === 0 ? "Close to where you land and the first sights" : "Base for the sights below", hotels: [],
+    search: { q: `${STAY_Q[f.style]} in ${area}, ${country}`, label: `${STAY_LABEL[f.style]} in ${area}`, perRoom } })).filter(x => x.nights > 0);
+  const vibes = [...d.v];
+  const packing = [...new Set([
+    ...(vibes.includes("B") ? ["Swimwear", "Reef-safe sunscreen"] : []), ...(vibes.includes("M") || vibes.includes("A") ? ["Good walking shoes", "Light fleece"] : []),
+    ...(e.season === "off" ? ["Rain jacket or umbrella"] : []), ...(d.domestic ? ["ID card"] : ["Passport + visa printouts", "Travel adapter", "Forex card"]),
+    "Power bank", "Basic meds"])].slice(0, 7);
+  const sarcasm = e.verdict === "nope"
+    ? pick([`This plan costs about ${lakh(e.typical)} each. Your budget says ${lakh(f.budget)}. One of those numbers has to move.`, `Wander did the maths and the maths said no. Trim days or pick a cheaper style.`], seed)
+    : e.season === "off"
+      ? pick([`${month} is off-season here. Fewer crowds, cheaper rooms, and weather that might have opinions.`, `Off-season in ${month}: pack a rain jacket and some patience.`], seed)
+      : pick([`${month} is a great time for ${d.name}. Book the flights before your group chat starts "thinking about it".`, `Solid plan. The only risk is someone in the group saying "let's decide next week".`, `Realistic, in season and within budget. Who are you and what have you done with the usual group?`], seed);
+  const ga = (window.WC_GETAROUND || {})[d.region] || [];
+  return {
+    source: "auto",
+    headline: `${D} days of ${d.famous.split(",")[0].toLowerCase()} and more`,
+    wanderSays: sarcasm,
+    speciality: d.famous.split(",").map(x => x.trim()).filter(Boolean),
+    getThere: { mode: e.fl.mode === "road" ? "road" : "flight", route: `${f.from} → ${d.iata}`, options: [e.fl.mode === "road" ? `Road trip from ${ORIGINS[f.from].name}, or an overnight bus/train` : `About ${d.hrs}h flying to ${d.iata}; compare direct vs one-stop`], fareLow: e.fl.low, fareHigh: e.fl.high, tip: e.fl.mode === "road" ? "Split a self-drive car or book a sleeper bus on redBus." : `${["May", "Jun", "Dec"].includes(month) ? "Peak season for Indian travellers: book 2–3 months ahead." : "Book 6–8 weeks ahead for the best fares."}` },
+    stays, getAround: ga.map(([mode, cost, tip]) => ({ mode, cost, tip })), days,
+    mustEat: dishes.slice(0, 6).map(x => ({ dish: x, name: "Best " + x, area: d.name.split(/[,&]/)[0].trim() })),
+    budget: e.breakdown, fitsBudget: e.verdict !== "nope", tradeoffs: "",
+    entry: d.visaNote, weather: `${e.season === "great" ? "Great season" : e.season === "ok" ? "Shoulder season" : "Off-season"} in ${month}. Best months: ${E.bestText(d.best)}.`,
+    packing, tips: [
+      `Entry: ${d.visaNote}.`,
+      ga[0] ? `Getting around: ${ga[0][0]} (${ga[0][2].toLowerCase()}).` : "Use ride-hailing apps over street taxis.",
+      `Budget around ${inr(dailyPP)} per person per day for food, transport and activities.`,
+      d.domestic ? "Carry some cash; UPI works almost everywhere but not in remote areas." : "Use a zero-forex card or carry some local cash for markets.",
+    ],
+  };
+}
+
+let previewT = null;
+function previewTrip(d, f, e) {
+  const plan = autoPlan(d, f, e);
+  previewT = { id: null, dest_key: d.key, form: f, estimate: { typical: e.typical, low: e.low, high: e.high, breakdown: e.breakdown }, plan, total: Math.round(Object.values(plan.budget).reduce((a, v) => a + num(v), 0)), created_by: S.me.id, created_at: new Date().toISOString() };
+  sheetTrip = null; openSheet(tripHTML(previewT), "trip"); galleryHTML(d).then(h => { const g = $("#gal"); if (g) g.innerHTML = h; }); bindTrip(previewT);
+}
+async function saveTrip(t) {
+  const row = { dest_key: t.dest_key, form: t.form, estimate: t.estimate, plan: t.plan, total: t.total, created_by: S.me.id };
+  const saved = await DB.insert("trips", row);
+  const name = (DEST[t.dest_key] || {}).name;
+  DB.insert("chat_messages", { user_id: S.me.id, kind: "system", body: `${t.plan.source === "ai" ? "had Wander plan" : "planned"} a ${t.form.days}-day ${name} trip (${lakh(t.total)} per person)` }).catch(() => {});
+  S.trips = [saved, ...S.trips.filter(x => x.id !== saved.id)];
+  return saved;
+}
+const samePlan = (t, key, f) => t.dest_key === key && num(t.form?.days) === num(f.days) && num(t.form?.style) === num(f.style);
+const isAI = t => t.plan && t.plan.source !== "auto";
+
+const LOADING = ["Reading the guidebook", "Shortlisting hotels that exist", "Hunting down the food", "Balancing the budget", "Adding a little sarcasm"];
+async function polishPlan(t) {
+  const d = DEST[t.dest_key], f = t.form;
+  const existing = S.trips.find(x => isAI(x) && samePlan(x, d.key, f));
+  if (existing) { toast("Wander already polished this exact trip. Opening it, free!"); return openTrip(existing.id); }
+  const box = $("#polishBox"); if (!box) return; const ctl = { cancelled: false }; planCtl = ctl;
+  box.innerHTML = `<div class="loading-box"><div class="globe" aria-hidden="true"></div><h3 id="planStatus">${LOADING[0]}…</h3><p class="muted small" style="margin:0">Usually 20–40 seconds.</p></div>`;
+  let i = 0; const tick = setInterval(() => { i = Math.min(i + 1, LOADING.length - 1); const el = $("#planStatus"); if (el) el.textContent = LOADING[i] + "…"; }, 6000);
   try {
-    const plan = await ai("itinerary", { dest: { name: d.name, country: d.country, iata: d.iata, famous: d.famous, visaNote: d.visaNote, domestic: !!d.domestic }, form: formLabels(f), estimate: e.breakdown, total: e.typical });
+    const est = t.estimate || {};
+    const plan = await ai("itinerary", { dest: { name: d.name, country: d.country, iata: d.iata, famous: d.famous, visaNote: d.visaNote, domestic: !!d.domestic }, form: formLabels(f), estimate: est.breakdown || t.plan.budget, total: est.typical || t.total });
     clearInterval(tick); if (ctl.cancelled) return;
     if (!plan || !Array.isArray(plan.days)) throw new Error("Wander's itinerary came back scrambled. Try again.");
-    const total = Object.values(plan.budget || e.breakdown).reduce((a, v) => a + num(v), 0);
-    const row = { dest_key: d.key, form: f, estimate: { typical: e.typical, low: e.low, high: e.high, breakdown: e.breakdown }, plan, total: Math.round(total), created_by: S.me.id };
-    const saved = await DB.insert("trips", row);
-    DB.insert("chat_messages", { user_id: S.me.id, kind: "system", body: `planned a ${f.days}-day ${d.name} trip (${lakh(total)} per person)` }).catch(() => {});
-    S.trips = [saved, ...S.trips.filter(t => t.id !== saved.id)];
+    plan.source = "ai";
+    const total = Math.round(Object.values(plan.budget || est.breakdown || {}).reduce((a, v) => a + num(v), 0));
+    const saved = await saveTrip({ ...t, plan, total });
     openTrip(saved.id);
   } catch (err) {
-    clearInterval(tick); if (ctl.cancelled || !$("#planArea")) return;
-    area.innerHTML = `<div class="card flat"><p style="margin:0;font-weight:700">${esc(err.message)}</p><button class="btn primary" id="genPlan" type="button">Try again</button></div>`;
-    $("#genPlan").onclick = () => buildPlan(d, f, e);
+    clearInterval(tick); if (ctl.cancelled || !$("#polishBox")) return;
+    box.innerHTML = `<p style="margin:0;font-weight:700">${esc(err.message)}</p><button class="btn primary" id="polishBtn" type="button">Try again</button>`;
+    $("#polishBtn").onclick = () => polishPlan(t);
   }
 }
 
@@ -527,11 +631,13 @@ function tripHTML(t) {
   const enquiry = `Hi! We're ${people} friends from ${ORIGINS[f.from]?.name || f.from} planning ${d.name} for ${f.days} days from ${fmtDate(f.start)}, ${STYLES[f.style]?.name.toLowerCase()} style, about ₹${num(f.budget).toLocaleString("en-IN")} per person. We'd like to stay around ${(p.stays || []).map(s => s.area).join(" and ") || "the main areas"}. Can you share a quote?`;
   const ag = d.domestic ? AGENCIES.dom : AGENCIES.intl;
   const gt = p.getThere || {};
-  const mine = t.created_by === S.me.id;
-  return `<div class="wrap"><div class="sheet-head">${X}<h2 id="sheetTitle">${esc(d.name)}, ${num(f.days)} days</h2><button class="vote" data-vote="${esc(t.id)}" aria-pressed="${myVote(t.id)}" type="button">♥ ${voteCount(t.id)}</button></div>
+  const mine = t.created_by === S.me.id, preview = !t.id, auto = p.source === "auto";
+  const polished = auto ? S.trips.find(x => isAI(x) && samePlan(x, t.dest_key, f)) : null;
+  return `<div class="wrap"><div class="sheet-head">${X}<h2 id="sheetTitle">${esc(d.name)}, ${num(f.days)} days</h2>${preview ? `<button class="btn small primary" id="saveTrip" type="button">Save to board</button>` : `<button class="vote" data-vote="${esc(t.id)}" aria-pressed="${myVote(t.id)}" type="button">♥ ${voteCount(t.id)}</button>`}</div>
   <div id="gal"><div class="skel" style="aspect-ratio:3/2;max-width:540px"></div></div>
-  <div><div class="eyebrow">Planned by ${esc(who(t.created_by).name)} · ${esc(ago(t.created_at))} · ${esc(STYLES[f.style]?.name || "")}</div><h2 class="section" style="font-size:26px;margin-top:4px">${esc(p.headline || "")}</h2></div>
+  <div><div class="eyebrow">${preview ? "Instant plan · not saved yet" : `${auto ? "Planned" : "Wander-polished plan"} by ${esc(who(t.created_by).name)} · ${esc(ago(t.created_at))}`} · ${esc(STYLES[f.style]?.name || "")}</div><h2 class="section" style="font-size:26px;margin-top:4px">${esc(p.headline || "")}</h2></div>
   ${p.wanderSays ? `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says</div><p>${esc(p.wanderSays)}</p></div></div>` : ""}
+  ${auto && AI_ON ? `<div class="card flat" id="polishBox"><div class="vs" style="justify-content:space-between"><div><b>Want hand-picked hotels and restaurants?</b><div class="small muted">${polished ? "Someone already had Wander polish this exact trip." : "Wander writes a detailed version with named places. Uses AI credits (about ₹2–3), takes ~30s, and the whole crew can reuse it."}</div></div><button class="btn small go" id="polishBtn" type="button">${polished ? "Open Wander's version" : "✨ Ask Wander to polish"}</button></div></div>` : ""}
   ${p.fitsBudget === false || p.tradeoffs ? `<div class="banner">${p.fitsBudget === false ? "<b>Heads up:</b> this plan runs over the budget. " : ""}${esc(p.tradeoffs || "")}</div>` : ""}
   ${(p.speciality || []).length ? `<div class="card"><h3>Famous for</h3><div class="chips">${p.speciality.map(s => `<a class="chip" href="${esc(G.search(s + " " + city))}" target="_blank" rel="noopener">${esc(s)}</a>`).join("")}</div></div>` : ""}
   <div class="flight"><div><div class="code">${esc(f.from)}</div><div class="small">${esc(ORIGINS[f.from]?.name || "")}</div></div><div class="mid">${gt.mode === "train" ? "🚆" : gt.mode === "road" ? "🚗" : "✈"}<br>${esc((gt.options || [])[0] || "")}</div><div class="end"><div class="code">${esc(d.iata)}</div><div class="small">${esc(d.name.split(/[,&]/)[0])}</div></div></div>
@@ -539,6 +645,7 @@ function tripHTML(t) {
     ${(gt.options || []).length ? `<ul class="list">${gt.options.map(o => `<li>${esc(o)}</li>`).join("")}</ul>` : ""}${gt.tip ? `<p class="note small">${esc(gt.tip)}</p>` : ""}
     <div class="glinks">${gl(G.flights(f.from, d.iata, f.start, addDays(f.start, f.days - 1)), "plane", "Google Flights")}${d.domestic ? gl("https://www.irctc.co.in/nget/train-search", "train", "IRCTC trains") : ""}</div></div>
   <div class="card"><h3>Where to stay</h3>${(p.stays || []).map(s => `<div class="stack" style="gap:8px"><div class="vs" style="justify-content:space-between"><b>${placeLink(s.area, "", d)} · ${num(s.nights)} nights</b></div><div class="small muted">${esc(s.why)}</div>
+    ${s.search ? `<div class="hotel"><div class="row"><b>${esc(s.search.label)}</b><span class="mono small">${s.search.perRoom ? "budget ~" + inr(s.search.perRoom) + "/night/room" : ""}</span></div><div class="small muted">Live results with today's prices, photos and reviews.</div><div class="glinks">${gl(G.hotels(s.search.q), "bed", "Google Hotels")}${gl(G.maps(s.search.q), "pin", "On the map")}</div></div>` : ""}
     ${(s.hotels || []).map(h => `<div class="hotel"><div class="row">${placeLink(h.name, h.area || s.area, d)}<span class="mono small">${h.perNightRoom ? "~" + inr(h.perNightRoom) + "/night/room" : ""}</span></div>${h.note ? `<div class="small muted">${esc(h.note)}</div>` : ""}<div class="glinks">${gl(G.hotels(`${h.name} ${h.area || s.area} ${d.domestic ? d.state : d.country}`), "bed", "Live prices")}</div></div>`).join("")}</div>`).join("") || `<p class="muted" style="margin:0">No stays listed.</p>`}</div>
   ${(p.getAround || []).length ? `<div class="card"><h3>Getting around</h3>${p.getAround.map(x => `<div class="slot"><b>${esc(x.mode)}</b><span><span class="mono small">${esc(x.cost)}</span> · ${esc(x.tip)}</span></div>`).join("")}</div>` : ""}
   <div class="eyebrow">Day by day</div>
@@ -560,7 +667,7 @@ function tripHTML(t) {
   <div class="kv"><div><b>Entry</b>${esc(p.entry || d.visaNote)}</div><div><b>Weather</b>${esc(p.weather || "")}</div></div>
   ${(p.tips || []).length ? `<div class="card"><h3>Local tips</h3><ul class="list">${p.tips.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
   ${(p.packing || []).length ? `<div class="card"><h3>Pack this</h3><div class="chips">${p.packing.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div></div>` : ""}
-  <div class="btnrow"><button class="btn" id="shareChat" type="button">💬 Post to group chat</button><button class="btn" id="regen" type="button">🔁 Plan another version</button>${mine || S.isAdmin ? `<button class="btn" id="delTrip" type="button">🗑 Delete</button>` : ""}</div>
+  <div class="btnrow"><button class="btn" id="shareChat" type="button">💬 Post to group chat</button>${preview ? "" : `<button class="btn" id="regen" type="button">🔁 Change dates or style</button>`}${!preview && (mine || S.isAdmin) ? `<button class="btn" id="delTrip" type="button">🗑 Delete</button>` : ""}</div>
   </div>`;
 }
 function openTrip(id) {
@@ -571,12 +678,15 @@ function openTrip(id) {
   if (d) galleryHTML(d).then(h => { const g = $("#gal"); if (g && sheetTrip === id) g.innerHTML = h; });
   bindTrip(t);
 }
-function bindTrip(t) {
+function bindTrip(t0) {
+  let t = t0;
   const P = $("#sheetPanel");
   const v = $("[data-vote]", P); if (v) v.onclick = () => toggleVote(t.id);
   const c = $("#copyEnq"); if (c) c.onclick = async () => { const ta = $("#enq"); try { await navigator.clipboard.writeText(ta.value); toast("Enquiry copied"); } catch { ta.select(); toast("Selected. Copy it from there."); } };
-  const s = $("#shareChat"); if (s) s.onclick = () => { sendChat(`Check out the ${t.form?.days}-day ${(DEST[t.dest_key] || {}).name} plan on the Trips tab: ${lakh(t.total)} per person. Vote if you're in ♥`); toast("Posted to the chat"); };
-  const r = $("#regen"); if (r) r.onclick = () => openDest(t.dest_key);
+  const sv = $("#saveTrip"); if (sv) sv.onclick = async () => { sv.disabled = true; try { const saved = await saveTrip(t); toast("Saved to the trip board"); openTrip(saved.id); } catch (e) { sv.disabled = false; toast(e.message); } };
+  const pb = $("#polishBtn"); if (pb) pb.onclick = () => polishPlan(t);
+  const s = $("#shareChat"); if (s) s.onclick = async () => { if (!t.id) { try { t = await saveTrip(t); } catch (e) { return toast(e.message); } } sendChat(`Check out the ${t.form?.days}-day ${(DEST[t.dest_key] || {}).name} plan on the Trips tab: ${lakh(t.total)} per person. Vote if you're in ♥`); toast("Posted to the chat"); };
+  const r = $("#regen"); if (r) r.onclick = () => { closeSheet(); setTab("plan"); toast("Change the dates or style above, then open the destination again"); };
   const del = $("#delTrip"); if (del) { let armed = false; del.onclick = async () => { if (!armed) { armed = true; del.textContent = "Tap again to delete"; return; } try { await DB.remove("trips", { id: t.id }); closeSheet(); toast("Trip deleted"); reload("trips"); } catch (e) { toast(e.message); } }; }
 }
 function refreshOpenTrip() {

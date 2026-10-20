@@ -66,7 +66,9 @@ async function claude(prompt: string, opts: { fast?: boolean; maxTokens?: number
   const max = opts.maxTokens || 2000;
   const deadline = Date.now() + 135_000;
   const tries: [string, number, number][] = opts.fast
-    ? [[FAST, max, 40_000], [FAST, max * 2, 40_000], [MODEL, max * 2, 50_000]]
+    ? (max > 4000
+      ? [[FAST, max, 75_000], [MODEL, max, 55_000]]                       // long answers (itineraries)
+      : [[FAST, max, 40_000], [FAST, max * 2, 40_000], [MODEL, max * 2, 50_000]])
     : [[MODEL, max, 95_000], [FAST, max, 60_000]];
   let lastErr: unknown = null;
   for (const [model, tokens, budget] of tries) {
@@ -124,7 +126,7 @@ Reply with only JSON, exactly this shape (days array must have exactly ${days} e
 "budget":{"flights":0,"stay":0,"food":0,"transport":0,"activities":0,"visaInsurance":0,"misc":0},
 "fitsBudget":true,"tradeoffs":"what was cut to fit, or empty",
 "entry":"visa/permit sentence for Indians","weather":"one sentence for these dates","packing":["4-6 items"],"tips":["4-5 sharp local tips"]}`;
-    return extractJSON(await claude(prompt, { maxTokens: 9000 }));
+    return extractJSON(await claude(prompt, { fast: true, maxTokens: 7000 }));
   },
 
   async chat(p, ctx) {
