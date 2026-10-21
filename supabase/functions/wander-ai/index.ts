@@ -94,6 +94,15 @@ const recentLines = (p: any) => (p.recent || []).slice(-6).map((m: any) => `${S(
 // ---------------------------------------------------------------- live prices (SerpApi reads Google Flights / Google Hotels,
 // the same pages our links open, so the numbers match). Shared cache keeps the free quota alive.
 const HOUR = 3600_000;
+// Accept the key under SERPAPI_KEY or any secret whose name mentions "serp" (e.g. SERP_API_KEY), trimmed.
+function serpKey() {
+  const direct = (Deno.env.get("SERPAPI_KEY") || "").trim();
+  if (direct) return direct;
+  const env = Deno.env.toObject();
+  const name = Object.keys(env).find((k) => /serp/i.test(k.trim()));
+  if (!name) console.warn("live prices off: no SERPAPI secret. Secret names visible:", Object.keys(env).filter((k) => !/^(SUPABASE|DENO|SB_|HOME|PATH|HOSTNAME|PWD|LANG|TZ)/.test(k)).join(", "));
+  return name ? String(env[name]).trim() : "";
+}
 const memCache = new Map<string, { at: number; data: unknown }>();
 const ISO = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : "");
 const IATA = (v: unknown) => (/^[A-Z]{3}$/.test(String(v || "").toUpperCase()) ? String(v).toUpperCase() : "");
@@ -132,7 +141,7 @@ let quotaMemo: { at: number; left: number | null } = { at: 0, left: null };
 async function quotaLeft() {
   if (Date.now() - quotaMemo.at < 10 * 60_000) return quotaMemo.left;
   try {
-    const r = await fetch("https://serpapi.com/account.json?api_key=" + encodeURIComponent(Deno.env.get("SERPAPI_KEY") || ""));
+    const r = await fetch("https://serpapi.com/account.json?api_key=" + encodeURIComponent(serpKey()));
     const j = await r.json();
     const left = Number.isFinite(Number(j.total_searches_left)) ? Number(j.total_searches_left) : Number.isFinite(Number(j.plan_searches_left)) ? Number(j.plan_searches_left) : null;
     quotaMemo = { at: Date.now(), left };
@@ -142,7 +151,7 @@ async function quotaLeft() {
 
 // peek: return a cached price only (free). fresh: re-fetch, but only if the cached one is over an hour old.
 async function cached(ctx: { admin: any; userId: string }, key: string, dateIso: string, p: any, fetcher: () => Promise<unknown>) {
-  if (!Deno.env.get("SERPAPI_KEY")) throw new Error("LIVE_OFF");
+  if (!serpKey()) throw new Error("LIVE_OFF");
   const hit = await readCache(ctx.admin, key);
   const age = hit ? Date.now() - hit.at : Infinity;
   const valid = age < ttlFor(dateIso);
@@ -159,7 +168,7 @@ async function cached(ctx: { admin: any; userId: string }, key: string, dateIso:
 }
 
 async function serp(params: Record<string, string>) {
-  const key = Deno.env.get("SERPAPI_KEY");
+  const key = serpKey();
   if (!key) throw new Error("LIVE_OFF");
   const qs = new URLSearchParams({ ...params, currency: "INR", gl: "in", hl: "en", api_key: key });
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 45_000);
