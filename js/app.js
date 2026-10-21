@@ -29,7 +29,7 @@ const hash = s => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0
 const G = {
   maps: q => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(q),
   hotels: q => "https://www.google.com/travel/search?q=" + encodeURIComponent(q),
-  flights: (from, to, s, e) => "https://www.google.com/travel/flights?q=" + encodeURIComponent(`Flights from ${from} to ${to} on ${s} through ${e}`),
+  flights: (from, to, s, e, oneway) => "https://www.google.com/travel/flights?hl=en&curr=INR&q=" + encodeURIComponent(oneway ? `One way flights from ${from} to ${to} on ${s}` : `Flights from ${from} to ${to} on ${s} returning ${e}`),
   search: q => "https://www.google.com/search?q=" + encodeURIComponent(q),
   images: q => "https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(q),
 };
@@ -89,7 +89,7 @@ async function galleryHTML(d) {
 /* ------------------------------------------------------------------ state */
 const S = {
   me: null, isAdmin: false,
-  form: Object.assign({ budget: 120000, style: 1, days: 6, people: 4, start: "2027-06-12", from: "BLR", regions: [], vibes: [] }, store.get("form", {})),
+  form: Object.assign({ budget: 120000, style: 1, days: 6, people: 4, start: "2027-06-12", from: "BLR", trip: "round", regions: [], vibes: [] }, store.get("form", {})),
   rec: null, recForm: null, ai: null, aiBusy: false,
   profiles: {}, trips: [], votes: [], chat: [], pollVotes: [], ideas: [], ideaVotes: [], games: {}, moves: [], allow: [], peers: [],
   tab: "plan", crewSeg: "chat", game: "home", lastSeenChat: store.get("lastChat", 0),
@@ -168,6 +168,102 @@ async function ai(task, payload) {
   if (data && data.error) throw new Error(data.error);
   return data.result;
 }
+
+/* ------------------------------------------------------------------ live prices (Google Flights / Hotels via the server) */
+const LIVE_TTL = 6 * 3600e3;
+async function livePrices(payload) {
+  const ck = "live:" + JSON.stringify(payload), mem = store.get("live", {});
+  if (!payload.fresh && mem[ck] && Date.now() - mem[ck].at < LIVE_TTL) return mem[ck].data;
+  const { data, error } = await sb.functions.invoke("wander-ai", { body: { task: "prices", payload } });
+  if (error) {
+    let msg = error.message || "Couldn't reach live prices.";
+    try { const j = await error.context.json(); if (j && j.error) msg = j.error; } catch {}
+    if (/Failed to send a request/i.test(msg) || (error.context && error.context.status === 546)) msg = "Live prices took too long. Try again in a moment.";
+    throw new Error(msg);
+  }
+  if (data && data.error) throw new Error(data.error);
+  const res = data.result;
+  if (res && !res.off) { const { fresh, ...k } = payload; const key = "live:" + JSON.stringify(k); const c = store.get("live", {}); const ks = Object.keys(c); if (ks.length > 40) delete c[ks[0]]; c[key] = { at: Date.now(), data: res }; store.set("live", c); }
+  return res;
+}
+const IATA3 = v => /^[A-Z]{3}$/.test(String(v || "")) ? v : "";
+const tripWord = ow => ow ? "one way" : "round trip";
+function liveFlightCard(d, f) {
+  if (!LIVE) return "";
+  const to = IATA3(d.iata), from = IATA3(f.from);
+  if (!to || !from || (d.road && d.road[f.from])) return "";
+  const ow = f.trip === "oneway";
+  return `<div class="card live-card" data-live="fl" data-from="${from}" data-to="${to}" data-out="${esc(f.start)}" data-ret="${esc(addDays(f.start, f.days - 1))}" data-ow="${ow ? 1 : 0}" data-people="${num(f.people)}" data-dest="${esc(d.key)}">
+    <div class="live-head"><div><h3>✈ Live flight prices</h3><div class="small muted">Real fares from Google Flights for ${esc(fmtDay(f.start))}${ow ? "" : " to " + esc(fmtDay(addDays(f.start, f.days - 1)))}</div></div>
+    <div class="segment mini" role="radiogroup" aria-label="Flight type"><button type="button" data-livetrip="round" aria-selected="${!ow}">Round trip</button><button type="button" data-livetrip="oneway" aria-selected="${ow}">One way</button></div></div>
+    <div class="live-body">${liveIdle(d, f, ow)}</div></div>`;
+}
+function liveIdle(d, f, ow) {
+  const e = E.estimate(d, { ...f, trip: ow ? "oneway" : "round" });
+  return `<div class="live-idle"><div><div class="small muted">Our estimate, ${tripWord(ow)}</div><b class="mono">${inr(e.fl.low)} to ${inr(e.fl.high)}</b> <span class="small muted">per person</span></div><button class="btn small go" type="button" data-livego>Check live price</button></div>`;
+}
+const fmtDay = iso => { const t = new Date(iso + "T00:00:00Z"); return isNaN(t) ? iso : t.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }); };
+const agoShort = iso => { const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : Math.round(m / 60) + "h ago"; };
+const timeOnly = s => String(s || "").split(" ")[1] || "";
+function liveFlightResult(r, people) {
+  if (r.off) return `<p class="small muted" style="margin:0">Live prices aren't switched on yet. Ask the organiser to add the live-price key. Until then, tap the Google Flights link for real fares.</p>`;
+  if (r.empty) return `<p class="small muted" style="margin:0">Google Flights has no fares for these dates yet (airlines usually open booking about 11 months ahead). ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">Open the search</a>` : ""}</p>`;
+  const lvl = r.level ? `<span class="pill-lvl ${esc(r.level)}">${esc(r.level)} price</span>` : "";
+  return `<div class="live-top"><div><div class="small muted">Cheapest ${tripWord(r.oneway)}, per person</div><div class="live-price mono">${inr(r.cheapest)}</div><div class="small muted">× ${people} travellers = <b>${inr(r.cheapest * people)}</b></div></div>${lvl}</div>
+    ${r.typical ? `<div class="small muted">Usually ${inr(r.typical[0])} to ${inr(r.typical[1])} on this route, says Google.</div>` : ""}
+    <div class="fl-opts">${r.options.slice(0, 4).map(o => `<div class="fl-opt">${o.logo ? `<img src="${esc(o.logo)}" alt="" loading="lazy">` : `<span class="fl-noimg">✈</span>`}<div class="fl-mid"><b>${esc(o.airlines.join(", "))}</b><span class="small muted">${esc(timeOnly(o.depart))}${o.arrive ? " → " + esc(timeOnly(o.arrive)) : ""} · ${esc(o.duration)} · ${o.stops ? o.stops + " stop" + (o.stops > 1 ? "s" : "") + (o.via.length ? " via " + esc(o.via.join(", ")) : "") : "non-stop"}</span></div><b class="mono">${inr(o.price)}</b></div>`).join("")}</div>
+    <div class="live-foot"><span class="small muted">Checked ${esc(agoShort(r.checkedAt))}. Fares change often.</span><button class="linkbtn small" type="button" data-livego data-fresh="1">Refresh</button></div>
+    ${r.url ? `<a class="btn small block" href="${esc(r.url)}" target="_blank" rel="noopener">Open this exact search on Google Flights ↗</a>` : ""}`;
+}
+function liveHotelBtn(q, ci, co, label, opts = {}) {
+  if (!LIVE) return "";
+  return `<div class="live-hotel" data-live="ht" data-q="${esc(q)}" data-in="${esc(ci)}" data-out="${esc(co)}" data-single="${opts.single ? 1 : 0}"><button class="btn small go" type="button" data-livego>${esc(label)}</button></div>`;
+}
+function liveHotelResult(r) {
+  if (r.off) return `<p class="small muted" style="margin:0">Live prices aren't switched on yet. Use the Google Hotels link for today's rates.</p>`;
+  const nights = Math.max(1, Math.round((new Date(r.out) - new Date(r.in)) / 864e5));
+  const head = `<div class="small muted">${esc(fmtDay(r.in))} to ${esc(fmtDay(r.out))}, ${nights} night${nights > 1 ? "s" : ""}, ${r.adults} adults per room</div>`;
+  const foot = `<div class="live-foot"><span class="small muted">Checked ${esc(agoShort(r.checkedAt))}</span><button class="linkbtn small" type="button" data-livego data-fresh="1">Refresh</button></div>${r.url ? `<a class="btn small block" href="${esc(r.url)}" target="_blank" rel="noopener">Open these dates on Google Hotels ↗</a>` : ""}`;
+  if (r.kind === "hotel") {
+    return `${head}<div class="live-top"><div><div class="small muted">${esc(r.name)}, lowest per night</div><div class="live-price mono">${r.perNight ? inr(r.perNight) : "n/a"}</div>${r.total ? `<div class="small muted">${inr(r.total)} for the stay</div>` : ""}</div>${r.rating ? `<span class="pill-lvl">★ ${r.rating}</span>` : ""}</div>
+      ${r.sites.length ? `<div class="fl-opts">${r.sites.map(s => `<a class="fl-opt" href="${esc(s.link)}" target="_blank" rel="noopener"><div class="fl-mid"><b>${esc(s.source)}</b><span class="small muted">${s.total ? inr(s.total) + " total" : ""}</span></div><b class="mono">${inr(s.perNight)}/night</b></a>`).join("")}</div>` : ""}${foot}`;
+  }
+  if (r.empty) return `${head}<p class="small muted" style="margin:0">No live rates for these dates yet.</p>${foot}`;
+  return `${head}<div class="fl-opts">${r.hotels.map(h => `<a class="fl-opt" href="${esc(h.link || G.hotels(h.name + " " + r.q))}" target="_blank" rel="noopener">${h.thumb ? `<img class="ht-thumb" src="${esc(h.thumb)}" alt="" loading="lazy">` : ""}<div class="fl-mid"><b>${esc(h.name)}</b><span class="small muted">${h.rating ? "★ " + h.rating + (h.reviews ? " (" + h.reviews.toLocaleString("en-IN") + ")" : "") : esc(h.type)}${h.total ? " · " + inr(h.total) + " total" : ""}</span></div><b class="mono">${inr(h.perNight)}<small>/night</small></b></a>`).join("")}</div>${foot}`;
+}
+document.addEventListener("click", async e => {
+  const tb = e.target.closest("[data-livetrip]");
+  if (tb) {
+    const card = tb.closest("[data-live]"); const ow = tb.dataset.livetrip === "oneway";
+    card.dataset.ow = ow ? 1 : 0; $$("[data-livetrip]", card).forEach(x => x.setAttribute("aria-selected", x === tb));
+    const d = DEST[card.dataset.dest], f = S.recForm || S.form;
+    $(".live-body", card).innerHTML = d ? liveIdle(d, { ...f, start: card.dataset.out, people: num(card.dataset.people) }, ow) : "";
+    if (card.dataset.loaded) $("[data-livego]", card).click();
+    return;
+  }
+  const go = e.target.closest("[data-livego]"); if (!go) return;
+  const box = go.closest("[data-live]"); if (!box) return;
+  const isFl = box.dataset.live === "fl";
+  const body = isFl ? $(".live-body", box) : box;
+  const payload = isFl
+    ? { kind: "flights", from: box.dataset.from, to: box.dataset.to, out: box.dataset.out, ret: box.dataset.ow === "1" ? "" : box.dataset.ret, oneway: box.dataset.ow === "1" }
+    : { kind: "hotels", q: box.dataset.q, in: box.dataset.in, out: box.dataset.out, adults: 2 };
+  if (go.dataset.fresh) payload.fresh = true;
+  body.innerHTML = `<div class="live-loading"><span class="spin"></span> Checking ${isFl ? "Google Flights" : "Google Hotels"}…</div>`;
+  try {
+    const r = await livePrices(payload);
+    box.dataset.loaded = 1;
+    body.innerHTML = isFl ? liveFlightResult(r, num(box.dataset.people) || 1) : liveHotelResult(r);
+    const d = DEST[box.dataset.dest];
+    if (isFl && d && r.cheapest) { // re-total the trip with the real fare instead of our flight estimate
+      const f = { ...(S.recForm || S.form), start: box.dataset.out, people: num(box.dataset.people), trip: r.oneway ? "oneway" : "round" };
+      const est = E.estimate(d, f), total = est.typical - est.breakdown.flights + r.cheapest;
+      body.insertAdjacentHTML("afterbegin", `<div class="banner live-total">With this live fare, the trip comes to about <b>${inr(total)}</b> per person (was ${inr(est.typical)} on our estimate).</div>`);
+    }
+  } catch (err) {
+    body.innerHTML = `<p class="small" style="margin:0;color:var(--bad)">${esc(err.message)}</p><button class="btn small" type="button" data-livego>Try again</button>`;
+  }
+});
 
 /* ------------------------------------------------------------------ auth */
 async function boot() {
@@ -273,6 +369,8 @@ function initForm() {
   $("#vibes").innerHTML = Object.entries(VIBES).map(([k, v]) => `<button type="button" class="chip" aria-pressed="${f.vibes.includes(k)}" data-vibe="${k}">${esc(v)}</button>`).join("");
   $("#vibes").onclick = e => { const b = e.target.closest("[data-vibe]"); if (!b) return; const v = b.dataset.vibe; f.vibes = f.vibes.includes(v) ? f.vibes.filter(x => x !== v) : [...f.vibes, v]; b.setAttribute("aria-pressed", f.vibes.includes(v)); saveForm(); };
   $$("[data-step]").forEach(btn => btn.onclick = () => { const [k, d] = btn.dataset.step.split(":"); const lim = { days: [2, 21], people: [1, 30] }[k]; f[k] = Math.min(lim[1], Math.max(lim[0], f[k] + num(d))); $("#" + k + "Out").textContent = f[k]; saveForm(); });
+  const tt = () => $$("#tripType [data-trip]").forEach(b => { const on = (f.trip || "round") === b.dataset.trip; b.setAttribute("aria-selected", on); b.setAttribute("aria-checked", on); });
+  tt(); $("#tripType").onclick = e => { const b = e.target.closest("[data-trip]"); if (!b) return; f.trip = b.dataset.trip; tt(); saveForm(); };
   $("#start").onchange = e => { f.start = e.target.value || "2027-06-12"; saveForm(); };
   $("#from").onchange = e => { f.from = e.target.value; saveForm(); };
   $("#planForm").onsubmit = e => { e.preventDefault(); runPlan(true); };
@@ -448,17 +546,18 @@ async function openDest(key) {
   openSheet(`<div class="wrap"><div class="sheet-head">${X}<h2 id="sheetTitle">${esc(d.name)}</h2></div>
     <div id="gal"><div class="skel" style="aspect-ratio:3/2;max-width:540px"></div></div>
     <div class="kv">
-      <div><b>Realistic cost / person</b><span class="mono">${lakh(e.typical)}</span> <span class="small muted">(${lakh(e.low)}–${lakh(e.high)})</span></div>
+      <div><b>Estimated cost / person</b><span class="mono">${lakh(e.typical)}</span> <span class="small muted">(${lakh(e.low)}–${lakh(e.high)})</span></div>
       <div><b>Your budget</b><span class="mono">${lakh(f.budget)}</span> <span class="small" style="color:${e.verdict === "fits" ? "var(--good)" : e.verdict === "tight" ? "var(--warn)" : "var(--bad)"};font-weight:800">${e.verdict === "fits" ? "Fits" : e.verdict === "tight" ? "Tight" : "Over"}</span></div>
       <div><b>Season in ${E.MONTHS[e.month - 1]}</b>${e.season === "great" ? "Great time to go" : e.season === "ok" ? "Shoulder season" : "Off-season, expect weather"}<br><span class="small muted">Best: ${esc(E.bestText(d.best))}</span></div>
       <div><b>Entry</b>${esc(d.visaNote)}</div>
-      <div><b>Getting there</b>${e.fl.mode === "road" ? "Road trip, cheapest by car or bus" : `~${d.hrs}h flight${d.iata ? " to " + esc(d.iata) : " to the nearest airport"}, ${lakh(e.fl.low)}–${lakh(e.fl.high)} return`}</div>
+      <div><b>Getting there</b>${e.fl.mode === "road" ? "Road trip, cheapest by car or bus" : `~${d.hrs}h flight${d.iata ? " to " + esc(d.iata) : " to the nearest airport"}, est. ${lakh(e.fl.low)}–${lakh(e.fl.high)} ${tripWord(f.trip === "oneway")}`}</div>
     </div>
     ${d.custom ? `<div class="banner">📍 ${esc(d.where || d.country)}. Found via live search. Costs are estimated from ${d.basedOn ? "similar places like " + esc(d.basedOn) : "typical prices in " + esc((REGIONS.find(r => r.id === d.region) || {}).name || "this region")}, so check the live links before booking.</div>` : ""}
+    ${liveFlightCard(d, f)}
     ${line ? `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says</div><p>${esc(line.line)}</p>${line.catch ? `<p class="catch"><b>Catch:</b> ${esc(line.catch)}</p>` : ""}</div></div>` : ""}
     <div class="card"><h3>Famous for</h3><p style="margin:0">${esc(d.famous)}</p><div class="glinks">
       ${gl(G.maps(city), "pin", "Map")}${gl(G.hotels("hotels in " + city), "bed", "Hotels & prices")}
-      ${e.fl.mode === "road" ? gl(G.maps(`${ORIGINS[f.from].name} to ${city}`), "pin", "Route") : gl(G.flights(f.from, flyTo(d), f.start, end), "plane", "Flights")}
+      ${e.fl.mode === "road" ? gl(G.maps(`${ORIGINS[f.from].name} to ${city}`), "pin", "Route") : gl(G.flights(f.from, flyTo(d), f.start, end, f.trip === "oneway"), "plane", "Flights")}
       ${gl(G.search("things to do in " + city), "star", "Things to do")}${gl(G.images(city + " travel"), "img", "Photos")}${gl(G.search(city + " weather " + E.MONTHS[e.month - 1]), "sun", "Weather")}
     </div></div>
     ${AI_ON ? `<div class="card flat" id="gemsBox"><div class="vs" style="justify-content:space-between"><div><b>💎 Hidden gems</b><div class="small muted">Wander's off-the-tourist-trail picks.</div></div><button class="btn small" id="gemsBtn" type="button">Show me</button></div><div id="gemsList"></div></div>` : ""}
@@ -643,11 +742,12 @@ function bindHotTake(t) {
 function bookingRows(d, f) {
   const from = f.from, to = d.iata || "", s = f.start, e = addDays(f.start, f.days - 1);
   const dmy = iso => iso.split("-").reverse().join("/"), yymmdd = iso => iso.slice(2).replace(/-/g, "");
+  const ow = f.trip === "oneway";
   const ad = Math.max(1, num(f.people)), rooms = Math.ceil(ad / 2), q = encodeURIComponent(d.domestic ? d.name.split(/[,&]/)[0].trim() : d.name.split(/[,&]/)[0].trim());
   const transport = [
-    { name: "Google Flights", url: G.flights(from, flyTo(d), s, e), best: "Fast price graph and fare alerts.", watch: "Doesn't sell tickets; books via airline or agent." },
-    { name: "Skyscanner", url: to ? `https://www.skyscanner.co.in/transport/flights/${from.toLowerCase()}/${to.toLowerCase()}/${yymmdd(s)}/${yymmdd(e)}/?adultsv2=${ad}` : "https://www.skyscanner.co.in/", best: "Compares every airline and OTA at once.", watch: "Third-party sellers; check their ratings." },
-    { name: "MakeMyTrip", url: to ? `https://www.makemytrip.com/flight/search?itinerary=${from}-${to}-${dmy(s)}_${to}-${from}-${dmy(e)}&tripType=R&paxType=A-${ad}_C-0_I-0&intl=${d.domestic ? "false" : "true"}&cabinClass=E` : "https://www.makemytrip.com/flights/", best: "Indian bank offers, UPI, no-cost EMI.", watch: "Convenience fee at checkout." },
+    { name: "Google Flights", url: G.flights(from, flyTo(d), s, e, ow), best: "Fast price graph and fare alerts.", watch: "Doesn't sell tickets; books via airline or agent." },
+    { name: "Skyscanner", url: to ? `https://www.skyscanner.co.in/transport/flights/${from.toLowerCase()}/${to.toLowerCase()}/${yymmdd(s)}/${ow ? "" : yymmdd(e) + "/"}?adultsv2=${ad}&currency=INR` : "https://www.skyscanner.co.in/", best: "Compares every airline and OTA at once.", watch: "Third-party sellers; check their ratings." },
+    { name: "MakeMyTrip", url: to ? `https://www.makemytrip.com/flight/search?itinerary=${from}-${to}-${dmy(s)}${ow ? "" : `_${to}-${from}-${dmy(e)}`}&tripType=${ow ? "O" : "R"}&paxType=A-${ad}_C-0_I-0&intl=${d.domestic ? "false" : "true"}&cabinClass=E` : "https://www.makemytrip.com/flights/", best: "Indian bank offers, UPI, no-cost EMI.", watch: "Convenience fee at checkout." },
     { name: "Cleartrip", url: "https://www.cleartrip.com/flights", best: "Clean checkout, frequent card offers.", watch: "Compare the final fare after fees." },
     { name: "EaseMyTrip", url: "https://www.easemytrip.com/", best: "Often zero convenience-fee promos.", watch: "Fewer filters on complex routes." },
   ];
@@ -741,12 +841,13 @@ function tripHTML(t) {
   ${p.fitsBudget === false || p.tradeoffs ? `<div class="banner">${p.fitsBudget === false ? "<b>Heads up:</b> this plan runs over the budget. " : ""}${esc(p.tradeoffs || "")}</div>` : ""}
   ${(p.speciality || []).length ? `<div class="card"><h3>Famous for</h3><div class="chips">${p.speciality.map(s => `<a class="chip" href="${esc(G.search(s + " " + city))}" target="_blank" rel="noopener">${esc(s)}</a>`).join("")}</div></div>` : ""}
   <div class="flight"><div><div class="code">${esc(f.from)}</div><div class="small">${esc(ORIGINS[f.from]?.name || "")}</div></div><div class="mid">${gt.mode === "train" ? "🚆" : gt.mode === "road" ? "🚗" : "✈"}<br>${esc((gt.options || [])[0] || "")}</div><div class="end"><div class="code">${esc(code(d))}</div><div class="small">${esc(d.name.split(/[,&]/)[0])}</div></div></div>
-  <div class="card"><div class="vs" style="justify-content:space-between"><h3>Getting there</h3>${gt.fareLow ? `<strong class="mono">${inr(gt.fareLow)}–${inr(gt.fareHigh)} return</strong>` : ""}</div>
+  <div class="card"><div class="vs" style="justify-content:space-between"><h3>Getting there</h3>${gt.fareLow ? `<strong class="mono small">est. ${inr(gt.fareLow)}–${inr(gt.fareHigh)} ${tripWord(f.trip === "oneway")}</strong>` : ""}</div>
     ${(gt.options || []).length ? `<ul class="list">${gt.options.map(o => `<li>${esc(o)}</li>`).join("")}</ul>` : ""}${gt.tip ? `<p class="note small">${esc(gt.tip)}</p>` : ""}
-    <div class="glinks">${gl(G.flights(f.from, flyTo(d), f.start, addDays(f.start, f.days - 1)), "plane", "Google Flights")}${d.domestic ? gl("https://www.irctc.co.in/nget/train-search", "train", "IRCTC trains") : ""}</div></div>
-  <div class="card"><h3>Where to stay</h3>${(p.stays || []).map(s => `<div class="stack" style="gap:8px"><div class="vs" style="justify-content:space-between"><b>${placeLink(s.area, "", d)} · ${num(s.nights)} nights</b></div><div class="small muted">${esc(s.why)}</div>
-    ${s.search ? `<div class="hotel"><div class="row"><b>${esc(s.search.label)}</b><span class="mono small">${s.search.perRoom ? "budget ~" + inr(s.search.perRoom) + "/night/room" : ""}</span></div><div class="small muted">Live results with today's prices, photos and reviews.</div><div class="glinks">${gl(G.hotels(s.search.q), "bed", "Google Hotels")}${gl(G.maps(s.search.q), "pin", "On the map")}</div></div>` : ""}
-    ${(s.hotels || []).map(h => `<div class="hotel"><div class="row">${placeLink(h.name, h.area || s.area, d)}<span class="mono small">${h.perNightRoom ? "~" + inr(h.perNightRoom) + "/night/room" : ""}</span></div>${h.note ? `<div class="small muted">${esc(h.note)}</div>` : ""}<div class="glinks">${gl(G.hotels(`${h.name} ${h.area || s.area} ${d.domestic ? d.state : d.country}`), "bed", "Live prices")}</div></div>`).join("")}</div>`).join("") || `<p class="muted" style="margin:0">No stays listed.</p>`}</div>
+    <div class="glinks">${gl(G.flights(f.from, flyTo(d), f.start, addDays(f.start, f.days - 1), f.trip === "oneway"), "plane", "Google Flights")}${d.domestic ? gl("https://www.irctc.co.in/nget/train-search", "train", "IRCTC trains") : ""}</div></div>
+  ${liveFlightCard(d, f)}
+  <div class="card"><h3>Where to stay</h3>${(() => { let night = 0; return (p.stays || []).map(s => { s._in = addDays(f.start, night); night += Math.max(1, num(s.nights)); s._out = addDays(f.start, night); return s; }); })().map(s => `<div class="stack" style="gap:8px"><div class="vs" style="justify-content:space-between"><b>${placeLink(s.area, "", d)} · ${num(s.nights)} nights</b></div><div class="small muted">${esc(s.why)}</div>
+    ${s.search ? `<div class="hotel"><div class="row"><b>${esc(s.search.label)}</b><span class="mono small">${s.search.perRoom ? "budget ~" + inr(s.search.perRoom) + "/night/room" : ""}</span></div><div class="small muted">Live results with today's prices, photos and reviews.</div><div class="glinks">${gl(G.hotels(s.search.q), "bed", "Google Hotels")}${gl(G.maps(s.search.q), "pin", "On the map")}</div>${liveHotelBtn(s.search.q, s._in, s._out, "See live hotel prices for these dates")}</div>` : ""}
+    ${(s.hotels || []).map(h => `<div class="hotel"><div class="row">${placeLink(h.name, h.area || s.area, d)}<span class="mono small">${h.perNightRoom ? "~" + inr(h.perNightRoom) + "/night/room" : ""}</span></div>${h.note ? `<div class="small muted">${esc(h.note)}</div>` : ""}<div class="glinks">${gl(G.hotels(`${h.name} ${h.area || s.area} ${d.domestic ? d.state : d.country}`), "bed", "Google Hotels")}</div>${liveHotelBtn(`${h.name} ${h.area || s.area} ${d.domestic ? d.state : d.country}`, s._in, s._out, "Compare live prices across sites", { single: true })}</div>`).join("")}</div>`).join("") || `<p class="muted" style="margin:0">No stays listed.</p>`}</div>
   ${(p.getAround || []).length ? `<div class="card"><h3>Getting around</h3>${p.getAround.map(x => `<div class="slot"><b>${esc(x.mode)}</b><span><span class="mono small">${esc(x.cost)}</span> · ${esc(x.tip)}</span></div>`).join("")}</div>` : ""}
   <div class="eyebrow">Day by day</div>
   <div class="days">${(p.days || []).map((x, i) => `<div class="day"><div class="num" style="background:${colors[i % colors.length]}"><small>DAY</small>${esc(x.day || i + 1)}</div><div class="body">

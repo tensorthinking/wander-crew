@@ -31,7 +31,7 @@
   function flightRange(dest, origin, month) {
     let adj = 1;
     if (dest.domestic) {
-      if (dest.road && dest.road[origin]) return { low: dest.road[origin][0], high: dest.road[origin][1], mode: "road" };
+      if (dest.road && dest.road[origin]) return withOneWay({ low: dest.road[origin][0], high: dest.road[origin][1], mode: "road" }, 0.5);
       adj = ((root.WC_INDIA_ZONE_ADJ || {})[origin] || {})[dest.zone] || 1;
     } else {
       adj = (((root.WC_ORIGINS || {})[origin] || {}).adj || {})[dest.region] || 1;
@@ -41,8 +41,10 @@
     if ([5, 6, 12].includes(month)) peak = 1.18;
     if ((dest.region === "europe" || dest.region === "north-america") && [7, 8].includes(month)) peak = Math.max(peak, 1.15);
     if (dest.domestic && [10, 11].includes(month)) peak = Math.max(peak, 1.1); // Diwali-ish
-    return { low: Math.round(dest.fl * adj * peak), high: Math.round(dest.fh * adj * peak), mode: "flight" };
+    // dest.fl/fh are round-trip economy fares. One-way is rarely half: ~55% abroad, ~52% domestic.
+    return withOneWay({ low: Math.round(dest.fl * adj * peak), high: Math.round(dest.fh * adj * peak), mode: "flight" }, dest.domestic ? 0.52 : 0.55);
   }
+  function withOneWay(r, k) { r.rtLow = r.low; r.rtHigh = r.high; r.owLow = Math.round(r.low * k); r.owHigh = Math.round(r.high * k); return r; }
 
   /** Full per-person estimate for one destination. */
   function estimate(dest, form) {
@@ -51,6 +53,9 @@
     const style = Math.min(3, Math.max(0, Number(form.style) || 0));
     const month = monthOf(form.start);
     const fl = flightRange(dest, form.from || "BLR", month);
+    const oneway = form.trip === "oneway";
+    if (oneway) { fl.low = fl.owLow; fl.high = fl.owHigh; }
+    fl.trip = oneway ? "oneway" : "round";
     const season = seasonFit(dest, month);
 
     let daily = dest.d[style];

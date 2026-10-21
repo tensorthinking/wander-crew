@@ -32,3 +32,9 @@ Prices are planning estimates, not quotes. Always check the live links before pa
 
 ## Personal settings
 Tap your profile photo for Settings. Everything is saved on that device: theme, accent colour, text size, card style, reduce motion, trip defaults (home city, budget, style, days, travellers, vibes), Wander's personality (Chill, Sarcastic or Savage), chat surprises, an AI on/off switch, message sounds, background notifications, the reactions bar, cache clearing and update checks.
+
+## Live prices (optional, recommended)
+The planner's numbers are estimates from a cost model. For real fares and hotel rates, the app asks SerpApi, which reads Google Flights and Google Hotels, the same pages the links open, so the numbers match.
+1. Sign up free at https://serpapi.com (250 searches a month free) and copy your API key.
+2. In Supabase: Edge Functions > Secrets > add `SERPAPI_KEY` with that key.
+Results are cached and shared across the crew for 6 hours, so the free quota goes a long way. Live prices don't count against the 100 AI requests per day.

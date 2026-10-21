@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bagel+Fat+One&family=Figtree:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
-<link rel="stylesheet" href="styles.css?v=20261021055003">
+<link rel="stylesheet" href="styles.css?v=20261021060601">
 <script>try{var t=localStorage.getItem("wc:theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t);var p=JSON.parse(localStorage.getItem("wc:prefs")||"{}");if(p.fontSize)document.documentElement.setAttribute("data-fontsize",p.fontSize);if(p.cards==="large")document.documentElement.classList.add("cards-large")}catch(e){}</script>
 </head>
 <body>
@@ -84,6 +84,9 @@
       <div class="row2">
         <div class="field"><label for="start">Start date</label><input type="date" id="start"></div>
         <div class="field"><label for="from">Leaving from</label><select id="from"></select></div>
+      </div>
+      <div class="field"><span class="lbl">Flights</span>
+        <div class="segment" id="tripType" role="radiogroup" aria-label="Flight type"><button type="button" data-trip="round" role="radio">⇄ Round trip</button><button type="button" data-trip="oneway" role="radio">→ One way</button></div>
       </div>
 
       <div class="field"><span class="lbl">Where in the world? <span class="muted">Pick one or more</span></span>
@@ -181,12 +184,12 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script>window.WC_BUILD = "20261021055003";</script>
-<script src="js/config.js?v=20261021055003"></script>
-<script src="data/destinations.js?v=20261021055003"></script>
-<script src="data/places.js?v=20261021055003"></script>
-<script src="js/engine.js?v=20261021055003"></script>
-<script src="js/search.js?v=20261021055003"></script>
-<script src="js/app.js?v=20261021055003"></script>
+<script>window.WC_BUILD = "20261021060601";</script>
+<script src="js/config.js?v=20261021060601"></script>
+<script src="data/destinations.js?v=20261021060601"></script>
+<script src="data/places.js?v=20261021060601"></script>
+<script src="js/engine.js?v=20261021060601"></script>
+<script src="js/search.js?v=20261021060601"></script>
+<script src="js/app.js?v=20261021060601"></script>
 </body>
 </html>

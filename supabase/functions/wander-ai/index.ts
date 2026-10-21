@@ -1,6 +1,6 @@
 // Wander Crew AI proxy. Holds the Anthropic key server-side, checks the caller is on the crew
 // allowlist, caps daily usage per person, and builds every prompt here (clients only send data).
-// Secrets: ANTHROPIC_API_KEY (required), ANTHROPIC_MODEL, AI_DAILY_LIMIT (optional)
+// Secrets: ANTHROPIC_API_KEY (required), ANTHROPIC_MODEL, AI_DAILY_LIMIT (optional), SERPAPI_KEY (live Google Flights/Hotels prices)
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -90,8 +90,115 @@ const N = (v: unknown) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : 
 const tripLine = (p: any) => (p.trips || []).slice(0, 5).map((t: any) => `${S(t.name, 50)} ${N(t.days)}d ₹${N(t.total)}pp`).join("; ") || "none yet";
 const recentLines = (p: any) => (p.recent || []).slice(-6).map((m: any) => `${S(m.who, 30)}: ${S(m.text, 160)}`).join("\n");
 
+
+// ---------------------------------------------------------------- live prices (SerpApi reads Google Flights / Google Hotels,
+// the same pages our links open, so the numbers match). Shared cache keeps the free quota alive.
+const PRICE_TTL_MS = 6 * 60 * 60 * 1000;
+const memCache = new Map<string, { at: number; data: unknown }>();
+const ISO = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : "");
+const IATA = (v: unknown) => (/^[A-Z]{3}$/.test(String(v || "").toUpperCase()) ? String(v).toUpperCase() : "");
+
+async function cached(admin: any, key: string, fresh: boolean, fetcher: () => Promise<unknown>) {
+  const m = memCache.get(key);
+  if (!fresh && m && Date.now() - m.at < PRICE_TTL_MS) return { ...(m.data as object), checkedAt: new Date(m.at).toISOString() };
+  if (!fresh) {
+    try {
+      const { data: row } = await admin.from("price_cache").select("data, fetched_at").eq("key", key).maybeSingle();
+      if (row && Date.now() - new Date(row.fetched_at).getTime() < PRICE_TTL_MS) {
+        memCache.set(key, { at: new Date(row.fetched_at).getTime(), data: row.data });
+        return { ...row.data, checkedAt: row.fetched_at };
+      }
+    } catch { /* cache table optional */ }
+  }
+  const data = await fetcher();
+  const at = Date.now();
+  memCache.set(key, { at, data });
+  try { await admin.from("price_cache").upsert({ key, data, fetched_at: new Date(at).toISOString() }); } catch { /* optional */ }
+  return { ...(data as object), checkedAt: new Date(at).toISOString() };
+}
+
+async function serp(params: Record<string, string>) {
+  const key = Deno.env.get("SERPAPI_KEY");
+  if (!key) throw new Error("LIVE_OFF");
+  const qs = new URLSearchParams({ ...params, currency: "INR", gl: "in", hl: "en", api_key: key });
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 45_000);
+  try {
+    const r = await fetch("https://serpapi.com/search.json?" + qs, { signal: ctl.signal });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) {
+      const msg = String(j.error || r.status);
+      if (/hasn't returned any results|no results/i.test(msg)) return { ...j, _empty: true };
+      if (/run out|limit|plan/i.test(msg)) throw new Error("The live-price quota for this month is used up. Prices shown are estimates until it resets.");
+      throw new Error("Live prices: " + msg.slice(0, 160));
+    }
+    return j;
+  } finally { clearTimeout(t); }
+}
+
+const mins = (n: number) => `${Math.floor(n / 60)}h ${n % 60 ? (n % 60) + "m" : ""}`.trim();
+function slimFlight(o: any) {
+  const legs = o.flights || [];
+  const first = legs[0] || {}, last = legs[legs.length - 1] || {};
+  const airlines = [...new Set(legs.map((l: any) => l.airline).filter(Boolean))];
+  return {
+    price: N(o.price), airlines, logo: o.airline_logo || first.airline_logo || "",
+    stops: Math.max(0, legs.length - 1), via: (o.layovers || []).map((l: any) => l.id || l.name).filter(Boolean).slice(0, 2),
+    duration: o.total_duration ? mins(N(o.total_duration)) : "",
+    depart: S(first.departure_airport?.time, 20), arrive: S(last.arrival_airport?.time, 20),
+    flightNos: legs.map((l: any) => l.flight_number).filter(Boolean).slice(0, 3),
+  };
+}
+
+async function liveFlights(p: any, admin: any) {
+  const from = IATA(p.from), to = IATA(p.to), out = ISO(p.out), ret = ISO(p.ret);
+  const oneway = !!p.oneway || !ret;
+  if (!from || !to || !out) throw new Error("Live prices need airport codes and a date.");
+  const key = `fl:${from}:${to}:${out}:${oneway ? "ow" : ret}`;
+  return cached(admin, key, !!p.fresh, async () => {
+    const j: any = await serp({ engine: "google_flights", departure_id: from, arrival_id: to, outbound_date: out, ...(oneway ? { type: "2" } : { type: "1", return_date: ret }), adults: "1", travel_class: "1" });
+    const all = [...(j.best_flights || []), ...(j.other_flights || [])].filter((o: any) => N(o.price) > 0).map(slimFlight).sort((a, b) => a.price - b.price);
+    const ins = j.price_insights || {};
+    return {
+      kind: "flights", from, to, out, ret: oneway ? "" : ret, oneway,
+      cheapest: all[0]?.price || 0, options: all.slice(0, 5),
+      typical: Array.isArray(ins.typical_price_range) ? ins.typical_price_range.map(N) : null, level: S(ins.price_level, 20),
+      url: S(j.search_metadata?.google_flights_url, 1500), empty: !all.length,
+    };
+  });
+}
+
+async function liveHotels(p: any, admin: any) {
+  const q = S(p.q, 140).trim(), ci = ISO(p.in), co = ISO(p.out);
+  const adults = String(Math.min(4, Math.max(1, N(p.adults) || 2)));
+  if (!q || !ci || !co) throw new Error("Live hotel prices need a place and dates.");
+  const maxPrice = N(p.maxPrice);
+  const key = `ht:${q.toLowerCase()}:${ci}:${co}:${adults}:${maxPrice || 0}`;
+  return cached(admin, key, !!p.fresh, async () => {
+    const j: any = await serp({ engine: "google_hotels", q, check_in_date: ci, check_out_date: co, adults, ...(maxPrice ? { max_price: String(maxPrice) } : {}) });
+    const url = S(j.search_metadata?.google_hotels_url, 1500);
+    if (!j.properties && j.name) { // the query matched one specific hotel: return its per-site prices
+      const sites = (j.prices || j.featured_prices || []).map((x: any) => ({ source: S(x.source, 40), perNight: N(x.rate_per_night?.extracted_lowest), total: N(x.total_rate?.extracted_lowest), link: S(x.link, 800) })).filter((x: any) => x.perNight).slice(0, 6);
+      return { kind: "hotel", name: S(j.name, 100), perNight: N(j.rate_per_night?.extracted_lowest), total: N(j.total_rate?.extracted_lowest), rating: Number(j.overall_rating) || 0, sites, url, adults: N(adults), in: ci, out: co };
+    }
+    const list = (j.properties || []).filter((h: any) => N(h.rate_per_night?.extracted_lowest) > 0).slice(0, 6).map((h: any) => ({
+      name: S(h.name, 100), perNight: N(h.rate_per_night?.extracted_lowest), total: N(h.total_rate?.extracted_lowest),
+      rating: Number(h.overall_rating) || 0, reviews: N(h.reviews), stars: N(h.extracted_hotel_class), type: S(h.type, 20),
+      thumb: S(h.images?.[0]?.thumbnail, 500), link: S(h.link, 800),
+    }));
+    return { kind: "hotels", q, in: ci, out: co, adults: N(adults), hotels: list, url, empty: !list.length };
+  });
+}
+
 // ---------------------------------------------------------------- tasks
 const tasks: Record<string, (p: any, ctx: Ctx) => Promise<unknown>> = {
+  async prices(p, ctx) {
+    try {
+      return p.kind === "hotels" ? await liveHotels(p, ctx.admin) : await liveFlights(p, ctx.admin);
+    } catch (e) {
+      if (String((e as Error).message) === "LIVE_OFF") return { off: true };
+      throw e;
+    }
+  },
   async picks(p) {
     const f = p.form || {};
     const cands = (p.candidates || []).slice(0, 10).map((c: any) =>
@@ -232,15 +339,19 @@ Deno.serve(async (req) => {
     if (!crew) return json({ error: "You're not on this crew's list. Ask the organiser to add your email." }, 403);
 
     const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const { data: n, error: capErr } = await admin.rpc("bump_ai_usage", { p_user: u.user.id, p_limit: LIMIT });
-    if (capErr) throw new Error(capErr.message);
-    if (n === -1) return json({ error: `Daily AI limit reached (${LIMIT}). Wander needs a nap. Try tomorrow.` }, 429);
-
     const raw = await req.text();
     if (raw.length > 40000) return json({ error: "Request too large" }, 413);
     const { task, payload } = JSON.parse(raw || "{}");
     const fn = tasks[String(task)];
     if (!fn) return json({ error: "Unknown task" }, 400);
+
+    let n = 0;
+    if (task !== "prices") { // live prices use SerpApi, not AI credits
+      const { data, error: capErr } = await admin.rpc("bump_ai_usage", { p_user: u.user.id, p_limit: LIMIT });
+      if (capErr) throw new Error(capErr.message);
+      if (data === -1) return json({ error: `Daily AI limit reached (${LIMIT}). Wander needs a nap. Try tomorrow.` }, 429);
+      n = data;
+    }
     const result = await toneStore.run(String((payload && payload.tone) || "sarcastic"), () => fn(payload || {}, { admin, userId: u.user.id }));
     return json({ result, usedToday: n, limit: LIMIT });
   } catch (e) {
