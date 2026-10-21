@@ -1292,5 +1292,26 @@ $("#meBtn").onclick = () => {
   $("#themeSeg", m).onclick = e => { const b = e.target.closest("[data-theme-pick]"); if (!b) return; applyTheme(b.dataset.themePick); $$("[data-theme-pick]", m).forEach(x => x.setAttribute("aria-selected", x === b)); };
 };
 
+/* ------------------------------------------------------------------ update check: never get stuck on an old copy */
+let updateShown = false;
+async function checkForUpdate() {
+  if (updateShown || !window.WC_BUILD || window.WC_BUILD === "0" || location.protocol === "file:") return;
+  try {
+    const html = await (await fetch(location.pathname + "?check=" + Date.now(), { cache: "no-store" })).text();
+    const m = html.match(/WC_BUILD = "(\d+)"/);
+    if (m && m[1] !== window.WC_BUILD) {
+      updateShown = true;
+      const bar = document.createElement("button");
+      bar.className = "update-bar"; bar.type = "button";
+      bar.textContent = "✨ New version of Wander Crew. Tap to refresh";
+      bar.onclick = () => location.reload();
+      document.body.append(bar);
+    }
+  } catch {}
+}
+setInterval(checkForUpdate, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
+setTimeout(checkForUpdate, 8000);
+
 boot().catch(e => { console.error(e); toast("Something broke while starting: " + e.message); });
 })();

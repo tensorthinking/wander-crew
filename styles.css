@@ -572,3 +572,9 @@ h3{font-size:16px}
 #themeBtn span{font-size:17px;line-height:1;transition:transform .3s}
 #themeBtn:active span{transform:rotate(40deg) scale(.9)}
 @media (max-width:380px){.online-strip .count{display:none}}
+
+/* boarding-pass strip: same look in both themes, never a white slab in dark mode */
+.flight{background:linear-gradient(135deg,var(--grape),color-mix(in srgb,var(--grape) 55%,var(--lagoon)));color:#fff}
+.flight .mid{color:rgba(255,255,255,.9)}
+
+.update-bar{position:fixed;left:50%;transform:translateX(-50%);top:calc(64px + env(safe-area-inset-top,0px));z-index:80;border:0;border-radius:999px;padding:10px 16px;font-weight:800;font-size:13px;color:#fff;background:linear-gradient(135deg,var(--grape),var(--hibiscus));box-shadow:var(--shadow);max-width:calc(100% - 32px)}
