@@ -142,7 +142,7 @@ const LOADERS = {
   trips: async () => { S.trips = await DB.select("trips", { order: "created_at", desc: true, limit: 80 }); S.trips.forEach(t => { const c = t.form && t.form.customDest; if (c && c.key && !DEST[c.key]) DEST[c.key] = c; }); renderTrips(); refreshOpenTrip(); },
   trip_votes: async () => { S.votes = await DB.select("trip_votes"); renderTrips(); refreshOpenTrip(); },
   poll_votes: async () => { S.pollVotes = await DB.select("poll_votes"); renderChat(); },
-  chat_messages: async () => { S.chat = (await DB.select("chat_messages", { order: "created_at", desc: true, limit: 100 })).reverse(); renderChat(); badge(); },
+  chat_messages: async () => { S.chat = (await DB.select("chat_messages", { order: "created_at", desc: true, limit: 100 })).reverse(); renderChat(); badge(); onNewChat(); },
   ideas: async () => { S.ideas = await DB.select("ideas", { order: "created_at", desc: true, limit: 120 }); renderBoard(); },
   idea_votes: async () => { S.ideaVotes = await DB.select("idea_votes"); renderBoard(); },
   game_state: async () => { const rows = await DB.select("game_state"); const prev = S.games; S.games = Object.fromEntries(rows.map(r => [r.id, r.data])); onGames(prev); },
@@ -153,10 +153,11 @@ const reloadTimers = {};
 function reload(t) { clearTimeout(reloadTimers[t]); reloadTimers[t] = setTimeout(() => LOADERS[t]().catch(e => console.warn(t, e)), 150); }
 
 /* ------------------------------------------------------------------ AI */
-const AI_ON = LIVE;
+const PREFS = Object.assign({ tone: "sarcastic", surprises: true, ai: true, sound: false, notify: false, cards: "compact", fontSize: "m" }, store.get("prefs", {}));
+const AI_ON = LIVE && PREFS.ai !== false;
 async function ai(task, payload) {
   if (!AI_ON) throw new Error("Wander is switched off in preview mode.");
-  const { data, error } = await sb.functions.invoke("wander-ai", { body: { task, payload } });
+  const { data, error } = await sb.functions.invoke("wander-ai", { body: { task, payload: { ...payload, tone: PREFS.tone || "sarcastic" } } });
   if (error) {
     let msg = error.message || "Wander tripped over something.";
     try { const j = await error.context.json(); if (j && j.error) msg = j.error; } catch {}
@@ -994,6 +995,7 @@ $("#chatForm").onsubmit = async e => {
 
 /* ---- surprises: rare, cheap, and often free */
 function maybeSurprise() {
+  if (PREFS.surprises === false) return;
   const humans = S.chat.filter(m => m.kind === "msg" && !asWander(m));
   const lastW = [...S.chat].reverse().find(m => asWander(m));
   const sinceW = lastW ? S.chat.filter(m => new Date(m.created_at) > new Date(lastW.created_at) && m.kind === "msg" && !asWander(m)).length : humans.length;
@@ -1267,7 +1269,7 @@ function applyTheme(choice) {
   $("#themeBtn").setAttribute("aria-label", eff === "dark" ? "Switch to light theme" : "Switch to dark theme");
   $$('meta[name="theme-color"]').forEach(m => m.setAttribute("content", eff === "dark" ? "#0F1420" : "#F3F5F9"));
 }
-$("#themeBtn").onclick = () => { applyTheme(effectiveTheme() === "dark" ? "light" : "dark"); toast(effectiveTheme() === "dark" ? "Dark mode 🌙" : "Light mode ☀️"); };
+$("#themeBtn").onclick = () => { applyTheme(effectiveTheme() === "dark" ? "light" : "dark"); if (typeof applyPrefs === "function") applyPrefs(); toast(effectiveTheme() === "dark" ? "Dark mode 🌙" : "Light mode ☀️"); };
 darkMQ.addEventListener && darkMQ.addEventListener("change", () => { if (themeChoice() === "system") applyTheme("system"); });
 applyTheme(themeChoice());
 
@@ -1281,17 +1283,6 @@ function setTab(t) {
   if (t === "games" && S.game !== "home") showGame(S.game);
 }
 $$(".tab").forEach(b => b.onclick = () => setTab(b.dataset.tab));
-$("#meBtn").onclick = () => {
-  const old = $(".menu"); if (old) return old.remove();
-  const m = document.createElement("div"); m.className = "menu";
-  const tc = themeChoice();
-  m.innerHTML = `<div><b>${esc(S.me.name)}</b><div class="small muted">${esc(S.me.email || "Preview mode")}</div></div><div><div class="eyebrow" style="margin-bottom:6px">Theme</div><div class="segment" id="themeSeg">${[["light", "☀️ Light"], ["dark", "🌙 Dark"], ["system", "📱 Auto"]].map(([k, l]) => `<button type="button" data-theme-pick="${k}" aria-selected="${tc === k}">${l}</button>`).join("")}</div></div>${LIVE ? `<button class="btn small" id="signOut" type="button">Sign out</button>` : ""}<button class="btn small" id="closeMenu" type="button">Close</button>`;
-  document.body.append(m);
-  const so = $("#signOut", m); if (so) so.onclick = async () => { await sb.auth.signOut(); location.reload(); };
-  $("#closeMenu", m).onclick = () => m.remove();
-  $("#themeSeg", m).onclick = e => { const b = e.target.closest("[data-theme-pick]"); if (!b) return; applyTheme(b.dataset.themePick); $$("[data-theme-pick]", m).forEach(x => x.setAttribute("aria-selected", x === b)); };
-};
-
 /* ------------------------------------------------------------------ update check: never get stuck on an old copy */
 let updateShown = false;
 async function checkForUpdate() {
@@ -1312,6 +1303,133 @@ async function checkForUpdate() {
 setInterval(checkForUpdate, 5 * 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
 setTimeout(checkForUpdate, 8000);
+
+/* ------------------------------------------------------------------ settings */
+const ACCENTS = { purple: ["#6A5AE0", "#8F83F2"], pink: ["#D9467A", "#EE6E91"], teal: ["#13908F", "#3BB5B5"], orange: ["#D9781E", "#F0A64A"], green: ["#1E8F57", "#45C084"], blue: ["#2F6FE0", "#6C9CF5"] };
+function applyPrefs() {
+  const p = PREFS, root = document.documentElement, dark = effectiveTheme() === "dark";
+  const acc = ACCENTS[p.accent] || ACCENTS.purple;
+  root.style.setProperty("--grape", dark ? acc[1] : acc[0]);
+  root.dataset.fontsize = p.fontSize || "m";
+  root.classList.toggle("cards-large", p.cards === "large");
+  root.classList.toggle("reduce-motion", !!p.reduceMotion);
+}
+function savePrefs(patch) { Object.assign(PREFS, patch); store.set("prefs", PREFS); applyPrefs(); }
+
+let audioCtx = null;
+function ping() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(880, audioCtx.currentTime); o.frequency.exponentialRampToValueAtTime(1320, audioCtx.currentTime + .12);
+    g.gain.setValueAtTime(.0001, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(.15, audioCtx.currentTime + .02); g.gain.exponentialRampToValueAtTime(.0001, audioCtx.currentTime + .3);
+    o.connect(g).connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + .32);
+  } catch {}
+}
+let seenChatIds = null;
+function onNewChat() {
+  const ids = new Set(S.chat.map(m => m.id));
+  if (seenChatIds) {
+    const fresh = S.chat.filter(m => !seenChatIds.has(m.id) && m.user_id !== S.me.id && m.kind !== "system");
+    if (fresh.length) {
+      if (PREFS.sound && !(S.tab === "crew" && !document.hidden && PREFS.soundOnlyAway)) ping();
+      if (PREFS.notify && document.hidden && "Notification" in window && Notification.permission === "granted") {
+        const m = fresh[fresh.length - 1]; const w = asWander(m) ? { name: "Wander" } : who(m.user_id);
+        try { new Notification(`${w.name} in Wander Crew`, { body: snippet(m), tag: "wc-chat", icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23FF9A1F'/%3E%3C/svg%3E" }); } catch {}
+      }
+    }
+  }
+  seenChatIds = ids;
+}
+
+const opt = (name, value, label, cur) => `<button type="button" data-pref="${name}" data-val="${esc(value)}" aria-selected="${String(cur) === String(value)}">${label}</button>`;
+const toggle = (name, label, hint, on) => `<label class="set-row"><span><b>${label}</b>${hint ? `<small>${hint}</small>` : ""}</span><input type="checkbox" class="switch" data-toggle="${name}" ${on ? "checked" : ""}></label>`;
+function settingsHTML() {
+  const p = PREFS, f = S.form, tc = themeChoice();
+  return `<div class="wrap"><div class="sheet-head">${X}<h2 id="sheetTitle">Settings</h2></div>
+  <div class="card set-profile"><img src="${esc(S.me.avatar || ANON)}" alt=""><div><b>${esc(S.me.name)}</b><div class="small muted">${esc(S.me.email || "Preview mode")}${S.isAdmin ? " · admin" : ""}</div></div></div>
+
+  <div class="set-group"><div class="eyebrow">Appearance</div><div class="card">
+    <div class="set-row col"><b>Theme</b><div class="segment">${[["light", "☀️ Light"], ["dark", "🌙 Dark"], ["system", "📱 Auto"]].map(([k, l]) => `<button type="button" data-theme-pick="${k}" aria-selected="${tc === k}">${l}</button>`).join("")}</div></div>
+    <div class="set-row col"><b>Accent colour</b><div class="swatches">${Object.entries(ACCENTS).map(([k, c]) => `<button type="button" class="swatch" data-pref="accent" data-val="${k}" aria-selected="${(p.accent || "purple") === k}" aria-label="${k}" style="background:${c[0]}"></button>`).join("")}</div></div>
+    <div class="set-row col"><b>Text size</b><div class="segment">${opt("fontSize", "s", "Small", p.fontSize || "m")}${opt("fontSize", "m", "Medium", p.fontSize || "m")}${opt("fontSize", "l", "Large", p.fontSize || "m")}</div></div>
+    <div class="set-row col"><b>Destination cards on phones</b><div class="segment">${opt("cards", "compact", "Compact rows", p.cards || "compact")}${opt("cards", "large", "Big photos", p.cards || "compact")}</div></div>
+    ${toggle("reduceMotion", "Reduce motion", "Fewer animations", p.reduceMotion)}
+  </div></div>
+
+  <div class="set-group"><div class="eyebrow">Trip defaults</div><div class="card">
+    <div class="set-row"><span><b>Home city</b><small>Where your flights start</small></span><select id="setFrom">${Object.entries(ORIGINS).map(([k, o]) => `<option value="${k}" ${f.from === k ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select></div>
+    <div class="set-row"><span><b>Default budget</b><small>Per person, all-in</small></span><span class="budget-mini">₹<input id="setBudget" type="number" inputmode="numeric" min="5000" max="1500000" step="1000" value="${num(f.budget)}"></span></div>
+    <div class="set-row col"><b>Travel style</b><div class="segment">${STYLES.map(st => `<button type="button" data-formpick="style" data-val="${st.id}" aria-selected="${num(f.style) === st.id}">${st.name}</button>`).join("")}</div></div>
+    <div class="set-row"><span><b>Days</b></span><div class="stepper mini"><button type="button" data-fstep="days:-1">−</button><output id="setDays">${f.days}</output><button type="button" data-fstep="days:1">+</button></div></div>
+    <div class="set-row"><span><b>Travellers</b></span><div class="stepper mini"><button type="button" data-fstep="people:-1">−</button><output id="setPeople">${f.people}</output><button type="button" data-fstep="people:1">+</button></div></div>
+    <div class="set-row col"><b>Favourite vibes</b><div class="chips">${Object.entries(VIBES).map(([k, v]) => `<button type="button" class="chip" data-fvibe="${k}" aria-pressed="${f.vibes.includes(k)}">${esc(v)}</button>`).join("")}</div></div>
+  </div></div>
+
+  ${LIVE ? `<div class="set-group"><div class="eyebrow">Wander (AI)</div><div class="card">
+    ${toggle("ai", "AI features", "Turn off to hide every AI button and spend zero credits", p.ai !== false)}
+    <div class="set-row col"><b>Wander's personality</b><div class="segment">${opt("tone", "chill", "😌 Chill", p.tone || "sarcastic")}${opt("tone", "sarcastic", "😏 Sarcastic", p.tone || "sarcastic")}${opt("tone", "savage", "🔥 Savage", p.tone || "sarcastic")}</div><small class="muted">Applies to everything Wander writes for you.</small></div>
+    ${toggle("surprises", "Chat surprises", "Wander occasionally drops polls, facts and challenges", p.surprises !== false)}
+  </div></div>` : ""}
+
+  <div class="set-group"><div class="eyebrow">Chat & notifications</div><div class="card">
+    ${toggle("sound", "Message sound", "A soft ping when someone posts", !!p.sound)}
+    ${toggle("notify", "Notify me when the app is in the background", "Uses your browser's notifications while Wander Crew is open in a tab", !!p.notify)}
+    ${toggle("showReactions", "Show the reactions bar", "Otherwise tap 😀 to open it", !!p.showReactions)}
+  </div></div>
+
+  <div class="set-group"><div class="eyebrow">Data</div><div class="card">
+    <div class="set-row"><span><b>Clear cached photos & gems</b><small>Frees space on this device</small></span><button class="btn small" type="button" data-act="clearCache">Clear</button></div>
+    <div class="set-row"><span><b>Forget searched places</b><small>Custom destinations you looked up</small></span><button class="btn small" type="button" data-act="clearSearch">Forget</button></div>
+    <div class="set-row"><span><b>Reset planner</b><small>Back to the default budget and dates</small></span><button class="btn small" type="button" data-act="resetForm">Reset</button></div>
+  </div></div>
+
+  <div class="set-group"><div class="eyebrow">About</div><div class="card">
+    <div class="set-row"><span><b>Version</b><small>${esc(window.WC_BUILD || "dev")}</small></span><button class="btn small" type="button" data-act="update">Check for updates</button></div>
+    ${LIVE ? `<div class="set-row"><span><b>Signed in as</b><small>${esc(S.me.email)}</small></span><button class="btn small" type="button" data-act="signout">Sign out</button></div>` : ""}
+  </div></div>
+  </div>`;
+}
+function openSettings() {
+  const old = $(".menu"); if (old) old.remove();
+  openSheet(settingsHTML(), "settings");
+  const P = $("#sheetPanel");
+  P.onclick = async e => {
+    const th = e.target.closest("[data-theme-pick]"); if (th) { applyTheme(th.dataset.themePick); applyPrefs(); $$("[data-theme-pick]", P).forEach(x => x.setAttribute("aria-selected", x === th)); return; }
+    const pr = e.target.closest("[data-pref]"); if (pr) { savePrefs({ [pr.dataset.pref]: pr.dataset.val }); $$(`[data-pref="${pr.dataset.pref}"]`, P).forEach(x => x.setAttribute("aria-selected", x === pr)); return; }
+    const fp = e.target.closest("[data-formpick]"); if (fp) { S.form[fp.dataset.formpick] = num(fp.dataset.val); saveForm(); initForm(); $$(`[data-formpick="${fp.dataset.formpick}"]`, P).forEach(x => x.setAttribute("aria-selected", x === fp)); return; }
+    const fs = e.target.closest("[data-fstep]"); if (fs) { const [k, d] = fs.dataset.fstep.split(":"); const lim = { days: [2, 21], people: [1, 30] }[k]; S.form[k] = Math.min(lim[1], Math.max(lim[0], S.form[k] + num(d))); saveForm(); initForm(); $("#set" + (k === "days" ? "Days" : "People")).textContent = S.form[k]; return; }
+    const fv = e.target.closest("[data-fvibe]"); if (fv) { const v = fv.dataset.fvibe; S.form.vibes = S.form.vibes.includes(v) ? S.form.vibes.filter(x => x !== v) : [...S.form.vibes, v]; fv.setAttribute("aria-pressed", S.form.vibes.includes(v)); saveForm(); initForm(); return; }
+    const act = e.target.closest("[data-act]"); if (!act) return;
+    const a = act.dataset.act;
+    if (a === "clearCache") { ["photos", "gems", "hottake", "aiPicks"].forEach(k => { try { localStorage.removeItem("wc:" + k); } catch {} }); toast("Cleared. Photos will reload as you browse."); }
+    if (a === "clearSearch") { try { localStorage.removeItem("wc:customDest"); } catch {} toast("Searched places forgotten."); }
+    if (a === "resetForm") { try { localStorage.removeItem("wc:form"); } catch {} S.form = { budget: 120000, style: 1, days: 6, people: 4, start: "2027-06-12", from: "BLR", regions: [], vibes: [] }; initForm(); toast("Planner reset."); closeSheet(); }
+    if (a === "update") { updateShown = false; await checkForUpdate(); if (!$(".update-bar")) toast("You're on the latest version ✨"); }
+    if (a === "signout") { await sb.auth.signOut(); location.reload(); }
+  };
+  P.onchange = async e => {
+    const t = e.target.closest("[data-toggle]");
+    if (t) {
+      const k = t.dataset.toggle, on = t.checked;
+      if (k === "notify" && on) {
+        if (!("Notification" in window)) { t.checked = false; return toast("This browser doesn't support notifications."); }
+        const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+        if (perm !== "granted") { t.checked = false; return toast("Notifications are blocked. Allow them in your browser's site settings."); }
+      }
+      savePrefs({ [k]: on });
+      if (k === "showReactions") $("#reactRow").hidden = !on;
+      if (k === "sound" && on) ping();
+      if (k === "ai") { toast(on ? "AI features on. Reloading…" : "AI features off. Reloading…"); setTimeout(() => location.reload(), 700); }
+      return;
+    }
+    if (e.target.id === "setFrom") { S.form.from = e.target.value; saveForm(); initForm(); toast("Home city saved"); }
+    if (e.target.id === "setBudget") { S.form.budget = Math.max(5000, Math.min(1500000, num(e.target.value))); saveForm(); initForm(); toast("Default budget saved"); }
+  };
+}
+$("#meBtn").onclick = openSettings;
+applyPrefs();
+if (PREFS.showReactions) $("#reactRow").hidden = false;
 
 boot().catch(e => { console.error(e); toast("Something broke while starting: " + e.message); });
 })();

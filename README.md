@@ -29,3 +29,6 @@ Open the app → **Crew** tab → **Crew access** (admins only) → add their Go
 Blank out the two values in `js/config.js` and open `index.html` through any static server (`npx serve .`). Data then stays in your browser and the AI is off.
 
 Prices are planning estimates, not quotes. Always check the live links before paying.
+
+## Personal settings
+Tap your profile photo for Settings. Everything is saved on that device: theme, accent colour, text size, card style, reduce motion, trip defaults (home city, budget, style, days, travellers, vibes), Wander's personality (Chill, Sarcastic or Savage), chat surprises, an AI on/off switch, message sounds, background notifications, the reactions bar, cache clearing and update checks.

@@ -2,6 +2,7 @@
 // allowlist, caps daily usage per person, and builds every prompt here (clients only send data).
 // Secrets: ANTHROPIC_API_KEY (required), ANTHROPIC_MODEL, AI_DAILY_LIMIT (optional)
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -16,6 +17,13 @@ const MODEL = Deno.env.get("ANTHROPIC_MODEL") || "claude-haiku-5-5";
 const LIMIT = Number(Deno.env.get("AI_DAILY_LIMIT") || 100);
 
 const PERSONA = `You are Wander, the witty, slightly sarcastic AI travel buddy in "Wander Crew", a trip planner for Indian friends. Be realistic about money; use only real, well-known places (if unsure, name the area instead). Prices in ₹ per person. Be brief. Today: ${new Date().toISOString().slice(0, 10)}.`;
+
+const TONES: Record<string, string> = {
+  chill: " Tone right now: chill and warm. Friendly jokes only, no roasting, zero snark.",
+  sarcastic: "",
+  savage: " Tone right now: savage. Roast hard and be brutally honest, but stay playful and never mean about people's looks, identity or money troubles.",
+};
+const toneStore = new AsyncLocalStorage<string>();
 
 function extractJSON(text: string) {
   try { return JSON.parse(text); } catch { /* fall through */ }
@@ -33,7 +41,7 @@ async function callModel(model: string, prompt: string, maxTokens: number, timeo
   const key = Deno.env.get("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set on the server");
   const send = async (withThinkingOff: boolean) => {
-    const body: Record<string, unknown> = { model, max_tokens: maxTokens, system: PERSONA, messages: [{ role: "user", content: prompt }] };
+    const body: Record<string, unknown> = { model, max_tokens: maxTokens, system: PERSONA + (TONES[toneStore.getStore() || ""] || ""), messages: [{ role: "user", content: prompt }] };
     if (withThinkingOff) body.thinking = { type: "disabled" }; // answer directly: faster, and no empty thinking-only replies
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeoutMs);
     try {
@@ -233,7 +241,7 @@ Deno.serve(async (req) => {
     const { task, payload } = JSON.parse(raw || "{}");
     const fn = tasks[String(task)];
     if (!fn) return json({ error: "Unknown task" }, 400);
-    const result = await fn(payload || {}, { admin, userId: u.user.id });
+    const result = await toneStore.run(String((payload && payload.tone) || "sarcastic"), () => fn(payload || {}, { admin, userId: u.user.id }));
     return json({ result, usedToday: n, limit: LIMIT });
   } catch (e) {
     console.error(e);
