@@ -113,16 +113,17 @@
       <button role="tab" aria-selected="false" data-seg="access" type="button" id="accessTab" hidden>Crew access</button>
     </div>
     <div id="seg-chat" class="card chat-card">
-      <div class="chat-top"><span class="small muted">Tip: type <b>/</b> for polls, dice and more</span><button class="btn small admin-only" id="resetChat" type="button" hidden>🧹 Reset</button></div>
+      <div class="chat-top"><span class="small muted">Tap <b>/</b> for polls & games, <b>✨</b> for Wander</span><button class="btn small admin-only" id="resetChat" type="button" hidden>🧹 Reset</button></div>
       <div class="chat" id="chat" aria-live="polite"></div>
-      <div class="react-row" aria-label="Send a reaction to everyone online">
-        <button type="button" data-react="🔥" aria-label="Fire">🔥</button><button type="button" data-react="🏝️" aria-label="Island">🏝️</button><button type="button" data-react="✈️" aria-label="Plane">✈️</button><button type="button" data-react="😂" aria-label="Laugh">😂</button><button type="button" data-react="💸" aria-label="Money">💸</button><button type="button" data-react="🙄" aria-label="Eye roll">🙄</button>
+      <div class="react-row" id="reactRow" hidden aria-label="Send a reaction to everyone online">
+        <button type="button" data-react="🔥" aria-label="Fire">🔥</button><button type="button" data-react="🏝️" aria-label="Island">🏝️</button><button type="button" data-react="✈️" aria-label="Plane">✈️</button><button type="button" data-react="😂" aria-label="Laugh">😂</button><button type="button" data-react="💸" aria-label="Money">💸</button><button type="button" data-react="🙄" aria-label="Eye roll">🙄</button><button type="button" data-react="❤️" aria-label="Love">❤️</button>
       </div>
       <div class="reply-bar" id="replyBar" hidden><div class="reply-txt" id="replyTxt"></div><button class="x small-x" id="replyCancel" type="button" aria-label="Cancel reply">✕</button></div>
       <div class="cmd-menu" id="cmdMenu" hidden role="listbox" aria-label="Commands"></div>
-      <form class="composer" id="chatForm">
-        <input type="text" id="chatInput" maxlength="600" placeholder="Message the crew, or type / for commands" autocomplete="off" aria-label="Message">
-        <button class="btn go" type="submit">Send</button>
+      <form class="composer chat-composer" id="chatForm">
+        <div class="tools"><button type="button" class="tool" id="slashBtn" aria-label="Commands">/</button><button type="button" class="tool ai-only" id="wanderBtn" aria-label="Wander actions">✨</button><button type="button" class="tool" id="reactBtn" aria-label="Reactions">😀</button></div>
+        <input type="text" id="chatInput" maxlength="600" placeholder="Message the crew" autocomplete="off" aria-label="Message" enterkeyhint="send">
+        <button class="send" type="submit" aria-label="Send"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3.4 20.4l17.5-7.5a1 1 0 0 0 0-1.8L3.4 3.6a1 1 0 0 0-1.4 1.2L4.5 12l-2.5 7.2a1 1 0 0 0 1.4 1.2z"/></svg></button>
       </form>
     </div>
     <div id="seg-ideas" class="stack" hidden>

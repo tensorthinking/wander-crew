@@ -163,6 +163,33 @@ Reply with only JSON: {"type":"fact|poll|challenge","text":"...","q":"(poll only
     return { ok: true };
   },
 
+  async fun(p, ctx) {
+    const k = String(p.kind || "");
+    const post = async (body: string, label: string) => {
+      const { error } = await ctx.admin.from("chat_messages").insert({ user_id: null, kind: "ai", body: body.slice(0, 900), data: { label } });
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    };
+    if (k === "gems") {
+      const d = p.dest || {};
+      return extractJSON(await claude(`List 4 real, lesser-known spots in or near ${S(d.name, 80)}, ${S(d.state || d.country, 60)} that most tourists miss (known for: ${S(d.famous, 150)}). Only places you're sure exist.
+Reply with only JSON: {"gems":[{"name":"...","area":"...","why":"under 10 words, cheeky ok"}]}`, { maxTokens: 320 }));
+    }
+    if (k === "hottake") {
+      const d = p.dest || {}, f = p.form || {};
+      const text = await claude(`Give a witty 2-sentence hot take on this trip plan: ${N(f.days)} days in ${S(d.name, 80)}, ${S(f.styleName, 20)} style, ₹${N(p.total)} per person vs budget ₹${N(f.budget)}. Days: ${S((p.days || []).join("; "), 500)}. Be funny but useful.`, { maxTokens: 140 });
+      return { text };
+    }
+    if (k === "roles") {
+      const names = (p.names || []).slice(0, 12).map((n: unknown) => S(n, 30)).join(", ") || "the crew";
+      return post(await claude(`Assign each person a funny trip role (like "Snack Minister" or "Chief Photo Retaker") with a 6-word reason. People: ${names}. One line per person, "Name: Role, reason". No preamble.`, { maxTokens: 260 }), "/roles");
+    }
+    if (k === "excuse") return post(await claude(`Write a short, funny-but-usable leave request to ${S(p.target, 60)} for a friends' trip${tripLine(p) !== "none yet" ? ` (${tripLine(p)})` : ""}. Under 60 words, polite enough to actually send.`, { maxTokens: 160 }), "/excuse");
+    if (k === "caption") return post(await claude(`Write 3 short Instagram captions for the crew's trip${tripLine(p) !== "none yet" ? ` (${tripLine(p)})` : ""}${p.vibe ? `, vibe: ${S(p.vibe, 60)}` : ""}. Numbered, punny, with 1 emoji each.`, { maxTokens: 160 }), "/caption");
+    if (k === "hype") return post(await claude(`Write a 2-sentence hype message to get the crew to finally book${tripLine(p) !== "none yet" ? ` (${tripLine(p)})` : ""}. Energetic, a little sarcastic about their indecision.`, { maxTokens: 120 }), "/hype");
+    throw new Error("Unknown fun request");
+  },
+
   async ideas(p, ctx) {
     const list = extractJSON(await claude(`Brainstorm 5 fun, specific, slightly wild ideas for the crew's trip${p.dests ? ` (destinations on their board: ${S(p.dests, 300)})` : ""}: activities, challenges, themed nights, food quests. Each under 12 words. Don't repeat: ${S((p.existing || []).join(" | "), 500)}.
 Reply with only a JSON array of 5 strings.`, { maxTokens: 260 }));

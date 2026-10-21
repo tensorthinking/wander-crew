@@ -323,20 +323,16 @@ function aiLineFor(key) { return S.ai && S.ai.picks ? S.ai.picks.find(p => p.key
 
 function card(e, rank) {
   const d = e.dest, f = S.recForm, line = aiLineFor(d.key);
-  const over = e.verdict === "nope" ? `Over by ${lakh(e.low - f.budget)}+` : e.verdict === "tight" ? "Tight fit" : "Fits budget";
-  const route = e.fl.mode === "road" ? `<span>🚗 Road trip from ${esc(ORIGINS[f.from].name)}</span>` : `<b>${esc(f.from)}</b><span class="line"></span><span>✈</span><span class="line"></span><b>${esc(code(d))}</b>`;
+  const over = e.verdict === "nope" ? `Over by ${lakh(e.low - f.budget)}` : e.verdict === "tight" ? "Tight fit" : "Fits";
+  const season = e.season === "great" ? "☀️ In season" : e.season === "ok" ? "🌤 Shoulder season" : "🌧 Off-season";
+  const getting = e.fl.mode === "road" ? "🚗 Road trip" : `✈ ~${d.hrs}h`;
   return `<button class="pass" type="button" data-open="${esc(d.key)}" aria-label="Open ${esc(d.name)}">
     <div class="photo">${photoSlot(d, 0)}<span class="pill ${e.verdict}">${over}</span>${rank ? `<span class="rank">${rank}</span>` : ""}<span class="name">${esc(d.name)}<small>${esc(d.domestic ? d.state : d.country)}</small></span></div>
     <div class="stub">
-      <div class="route">${route}</div>
-      <div class="price"><span class="small muted">${lakh(e.low)}–${lakh(e.high)} range</span><strong>${lakh(e.typical)}</strong></div>
-      <div class="facts">
-        <div><span>Season</span><span>${e.season === "great" ? "✅ Great" : e.season === "ok" ? "🆗 Shoulder" : "⚠️ Off-season"} · best ${esc(E.bestText(d.best))}</span></div>
-        <div><span>Entry</span><span>${esc(d.visaNote)}</span></div>
-        <div><span>Getting there</span><span>${e.fl.mode === "road" ? "Drive or bus" : `~${d.hrs}h flight`} · ${e.usable.toFixed(1).replace(".0", "")} usable days</span></div>
-      </div>
-      ${line ? `<p class="line-ai">${esc(line.line)}</p>${line.catch ? `<p class="catch"><b>Catch:</b> ${esc(line.catch)}</p>` : ""}` : `<p class="line-ai">${esc(d.famous)}</p>`}
-      <div class="tags">${[...d.v].map(v => `<span class="tag">${esc(VIBES[v])}</span>`).join("")}</div>
+      <div class="pass-title"><b>${esc(d.name)}</b><small>${esc(d.domestic ? d.state : d.country)}</small></div>
+      <div class="price"><strong>${lakh(e.typical)}</strong><span class="small muted">${lakh(e.low)}–${lakh(e.high)} pp</span></div>
+      <div class="mini-facts"><span>${season}</span><span>${getting}</span><span title="${esc(d.visaNote)}">${d.domestic ? "🪪 No visa" : d.visa ? "🛂 Visa needed" : "🛂 Visa-free / on arrival"}</span></div>
+      ${line ? `<p class="line-ai">${esc(line.line)}</p>${line.catch ? `<p class="catch"><b>Catch:</b> ${esc(line.catch)}</p>` : ""}` : `<p class="line-ai muted-line">${esc(d.famous)}</p>`}
     </div></button>`;
 }
 
@@ -464,11 +460,13 @@ async function openDest(key) {
       ${e.fl.mode === "road" ? gl(G.maps(`${ORIGINS[f.from].name} to ${city}`), "pin", "Route") : gl(G.flights(f.from, flyTo(d), f.start, end), "plane", "Flights")}
       ${gl(G.search("things to do in " + city), "star", "Things to do")}${gl(G.images(city + " travel"), "img", "Photos")}${gl(G.search(city + " weather " + E.MONTHS[e.month - 1]), "sun", "Weather")}
     </div></div>
+    ${AI_ON ? `<div class="card flat" id="gemsBox"><div class="vs" style="justify-content:space-between"><div><b>💎 Hidden gems</b><div class="small muted">Wander's off-the-tourist-trail picks.</div></div><button class="btn small" id="gemsBtn" type="button">Show me</button></div><div id="gemsList"></div></div>` : ""}
     ${splitCard(e.breakdown, f.budget, `${STYLES[e.style].name} estimate, ${f.days} days`, `Wander Crew's cost model for ${f.people} sharing, ${E.MONTHS[e.month - 1]} fares from ${ORIGINS[f.from].name}. Check live prices with the links.`)}
     ${saved.length ? `<div class="card flat"><div class="eyebrow">Already on the trip board</div><div class="btnrow">${saved.map(t => `<button class="btn small" data-trip="${esc(t.id)}" type="button">${num(t.form?.days)} days · ${lakh(t.total)} · ${esc(who(t.created_by).name)}</button>`).join("")}</div></div>` : ""}
     <div id="planArea"><button class="btn primary block" id="genPlan" type="button">🗺️ Build our ${f.days}-day itinerary</button><p class="muted small" style="margin:8px 0 0">Instant and free: day-by-day sights, live Google searches for hotels and food at your price level, budget split and booking links.</p></div>
   </div>`, "dest");
   galleryHTML(d).then(h => { const g = $("#gal"); if (g) g.innerHTML = h; });
+  bindGems(d);
   const gp = $("#genPlan"); if (gp) gp.onclick = async () => { if (d.custom) { gp.disabled = true; gp.textContent = "Finding landmarks nearby…"; await Promise.race([ensureLandmarks(d), new Promise(r => setTimeout(r, 6000))]); } previewTrip(d, f, e); };
 }
 
@@ -496,6 +494,7 @@ function autoPlan(d, f, e) {
     if (sight) return { time, name: sight, area, what: time === "Evening" ? "Go late afternoon and stay for golden hour" : time === "Morning" ? "Go early to beat the crowds" : "Explore at your pace", cost: 0 };
     const [n, w] = fillers[fallbackIdx % fillers.length]; return { time, name: "", area, what: `${n}: ${w} in ${area}.`, cost: 0 };
   };
+  const addOns = activitiesFor(d, f);
   const days = []; const dailyPP = Math.round(e.breakdown.food / D + e.breakdown.activities / D + e.breakdown.transport / D);
   const arrive = e.fl.mode === "road" ? `Drive or bus from ${ORIGINS[f.from].name}` : `Fly ${f.from} → ${d.iata || d.name} (~${d.hrs}h)`;
   // day 1
@@ -509,7 +508,7 @@ function autoPlan(d, f, e) {
     for (let k = 0; k < alloc[ai]; k++) {
       const first = queues[ai][0];
       days.push({ day: dayNo, title: first ? `${area}: ${first}${queues[ai][1] ? " & more" : ""}` : `${area} at your own pace`, base: area,
-        plan: [slot("Morning", ai, dayNo), slot("Afternoon", ai, dayNo + 1), slot("Evening", ai, dayNo + 2)],
+        plan: [slot("Morning", ai, dayNo), slot("Afternoon", ai, dayNo + 1), slot("Evening", ai, dayNo + 2), ...(addOns.length ? [(() => { const a = addOns[(dayNo - 2) % addOns.length]; return { time: "Add-on", name: "", area, what: `${a.emo} Optional: ${a.name.toLowerCase()} (book ahead)`, cost: 0 }; })()] : [])],
         eat: [{ name: "Best " + nextDish(), area }, { name: "Best " + nextDish(), area }], costPP: dailyPP });
       dayNo++;
     }
@@ -600,6 +599,45 @@ async function polishPlan(t) {
   }
 }
 
+
+/* ---- AI extras: hidden gems + hot take (lightest model, cached on device) */
+function renderGems(d, list) {
+  const el = $("#gemsList"); if (!el) return;
+  el.innerHTML = list.map(g => `<div class="gem"><span>💎</span><span><b><a class="place" href="${esc(G.maps([g.name, g.area, d.domestic ? d.state + ", India" : d.country].filter(Boolean).join(", ")))}" target="_blank" rel="noopener">${esc(g.name)}</a></b><div class="small muted">${esc(g.area || "")}${g.why ? " · " + esc(g.why) : ""}</div></span></div>`).join("");
+  const b = $("#gemsBtn"); if (b) b.remove();
+}
+function bindGems(d) {
+  const cache = store.get("gems", {});
+  if (cache[d.key]) return renderGems(d, cache[d.key]);
+  const b = $("#gemsBtn"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = "Digging…";
+    try {
+      const out = await ai("fun", { kind: "gems", dest: { name: d.name, country: d.country, state: d.state || "", famous: d.famous } });
+      const list = (out && Array.isArray(out.gems) ? out.gems : []).filter(g => g && g.name).slice(0, 5);
+      if (!list.length) throw new Error("Wander came back empty-handed. Try again.");
+      const c = store.get("gems", {}); c[d.key] = list; store.set("gems", c); renderGems(d, list);
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = "Show me"; }
+  };
+}
+function bindHotTake(t) {
+  const box = $("#hotTake"); if (!box) return;
+  const key = t.id || "preview-" + t.dest_key + "-" + t.form.days + "-" + t.form.style;
+  const cache = store.get("hottake", {});
+  const show = txt => { box.innerHTML = `<div class="wander"><div class="av" aria-hidden="true">🎤</div><div><div class="who">Wander's hot take</div><p>${esc(txt)}</p></div></div>`; };
+  if (cache[key]) return show(cache[key]);
+  const b = $("#hotTakeBtn"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = "Warming up…";
+    const d = DEST[t.dest_key] || {};
+    try {
+      const out = await ai("fun", { kind: "hottake", dest: { name: d.name, country: d.country }, form: formLabels(t.form), total: t.total, days: (t.plan.days || []).map(x => x.title).slice(0, 10) });
+      const txt = String(out && out.text || "").trim(); if (!txt) throw new Error("Wander lost the plot. Try again.");
+      const c = store.get("hottake", {}); c[key] = txt; store.set("hottake", c); show(txt);
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = "🎤 Get Wander's hot take"; }
+  };
+}
+
 /* ------------------------------------------------------------------ booking comparison */
 function bookingRows(d, f) {
   const from = f.from, to = d.iata || "", s = f.start, e = addDays(f.start, f.days - 1);
@@ -634,6 +672,51 @@ const AGENCIES = {
   dom: [["MakeMyTrip Holidays", "https://www.makemytrip.com/holidays-india/", "Packages with flights and stays"], ["Thrillophilia", "https://www.thrillophilia.com/", "Treks, adventure and road trips"], ["Yatra Holidays", "https://www.yatra.com/india-tour-packages", "Budget-friendly domestic packages"]],
 };
 
+/* ------------------------------------------------------------------ itinerary extras (free, data-driven) */
+const ACT = {
+  B: ["🤿", ["Snorkelling trip", "Island-hopping boat tour", "Sunset cruise", "Beach club afternoon", "Sea kayaking"]],
+  N: ["🍸", ["Rooftop bar hop", "Night market food walk", "Pub crawl", "Live music bar", "Karaoke night"]],
+  M: ["🥾", ["Sunrise viewpoint hike", "Guided nature trek", "Cable car ride", "Waterfall day trip", "Stargazing night"]],
+  C: ["🏛️", ["Old town walking tour", "Museum day pass", "Heritage and temple circuit", "Local craft workshop", "Cultural show"]],
+  F: ["🍜", ["Street food tour", "Cooking class", "Morning market food crawl", "Dessert and café hop", "Tasting menu dinner"]],
+  S: ["🛍️", ["Night market shopping", "Design and mall district", "Flea market hunt", "Souvenir street stroll"]],
+  A: ["🪂", ["Scuba try-dive", "Paragliding", "White-water rafting", "Ziplining", "ATV or jeep safari"]],
+  L: ["🧖", ["Spa and massage day", "Infinity pool afternoon", "Private sunset dinner", "Catamaran or yacht charter"]],
+  W: ["🦁", ["Wildlife safari", "Bird-watching walk", "Sanctuary visit", "Dolphin or whale watching"]],
+};
+function activitiesFor(d, f) {
+  let vibes = [...(d.v || "")];
+  if (!vibes.length) vibes = ["C", "F", "M"];
+  if (num(f.style) >= 2 && !vibes.includes("L")) vibes.push("L");
+  (f.vibes || []).forEach(v => { if (!vibes.includes(v) && d.v && d.v.includes(v)) vibes.unshift(v); });
+  const out = [];
+  vibes.slice(0, 5).forEach(v => { const [emo, list] = ACT[v] || []; if (list) list.slice(0, v === vibes[0] ? 4 : 3).forEach(a => out.push({ emo, name: a, vibe: VIBES[v] })); });
+  return out.slice(0, 14);
+}
+function extrasHTML(d, f, p) {
+  const city = d.name.split(/[,&]/)[0].trim(), where = destCity(d);
+  const P = (window.WC_PLACES || {})[d.key] || { a: [], e: [] };
+  const used = new Set((p.days || []).flatMap(x => (x.plan || []).map(s => s.name)).filter(Boolean));
+  const more = P.a.flatMap(([area, sights]) => sights.filter(s => !used.has(s)).map(s => ({ s, area }))).slice(0, 12);
+  const areas = (p.stays && p.stays.length ? p.stays.map(s => s.area) : P.a.map(x => x[0])).slice(0, 3);
+  const acts = activitiesFor(d, f);
+  const tier = ["cheap eats", "best restaurants", "fine dining", "michelin or fine dining"][num(f.style)] || "best restaurants";
+  const eatQs = [["☕", "Cafés"], ["🍢", "Street food"], ["🍽️", tier[0].toUpperCase() + tier.slice(1)], ["🍸", "Rooftop bars"], ["🍰", "Desserts"], ["🌙", "Late-night food"]];
+  return `
+  <div class="card"><div class="vs" style="justify-content:space-between"><h3>Things to do</h3><span class="small muted">${acts.length} ideas</span></div>
+    <div class="act-grid">${acts.map((a, i) => `<a class="act${i >= 8 ? " act-more" : ""}"${i >= 8 ? " hidden" : ""} href="${esc("https://www.klook.com/en-IN/search/result/?query=" + encodeURIComponent(a.name + " " + city))}" target="_blank" rel="noopener"><span class="emo">${a.emo}</span><span><b>${esc(a.name)}</b><small>${esc(a.vibe)} · book on Klook</small></span></a>`).join("")}</div>
+    ${acts.length > 8 ? `<button class="btn small" type="button" onclick="this.parentNode.querySelectorAll('.act-more').forEach(x=>x.hidden=false);this.remove()">Show ${acts.length - 8} more</button>` : ""}
+    <div class="glinks">${gl(G.search("best things to do in " + where), "star", "More on Google")}${gl("https://www.getyourguide.com/s/?q=" + encodeURIComponent(city), "star", "GetYourGuide")}</div></div>
+  ${more.length ? `<div class="card"><div class="vs" style="justify-content:space-between"><h3>More places to explore</h3><span class="small muted">not in the day plan</span></div>
+    <div class="place-list">${more.map(x => `<a class="place-row" href="${esc(G.maps(x.s + ", " + x.area + ", " + (d.domestic ? d.state + ", India" : d.country)))}" target="_blank" rel="noopener"><span>📍</span><span><b>${esc(x.s)}</b><small>${esc(x.area)}</small></span><span class="go">↗</span></a>`).join("")}</div></div>` : ""}
+  <div class="card"><h3>Eat & drink</h3>
+    ${areas.map(a => `<div class="area-block"><div class="eyebrow">${esc(a)}</div><div class="chips">${eatQs.map(([e, q]) => `<a class="chip" href="${esc(G.maps(q + " in " + a + ", " + (d.domestic ? d.state : d.country)))}" target="_blank" rel="noopener">${e} ${esc(q)}</a>`).join("")}</div></div>`).join("")}
+    ${(P.e || []).length ? `<div class="area-block"><div class="eyebrow">Must-try</div><div class="chips">${P.e.map(x => `<a class="chip" href="${esc(G.maps("best " + x + " in " + city))}" target="_blank" rel="noopener">😋 ${esc(x)}</a>`).join("")}</div></div>` : ""}</div>
+  <div class="card"><h3>Shopping & nightlife</h3><div class="chips scroll-chips">
+    ${["Local markets", "Night markets", "Souvenir shops", "Malls", "Nightclubs", "Live music"].map(q => `<a class="chip" href="${esc(G.maps(q + " in " + where))}" target="_blank" rel="noopener">${esc(q)}</a>`).join("")}</div></div>
+  ${AI_ON ? `<div class="card flat" id="gemsBox"><div class="vs" style="justify-content:space-between"><div><b>💎 Hidden gems</b><div class="small muted">Wander's off-the-tourist-trail picks. Tiny AI cost, saved for everyone on this device.</div></div><button class="btn small" id="gemsBtn" type="button">Show me</button></div><div id="gemsList"></div></div>` : ""}`;
+}
+
 /* ------------------------------------------------------------------ trip view */
 const voteCount = id => S.votes.filter(v => v.trip_id === id).length;
 const myVote = id => S.votes.some(v => v.trip_id === id && v.user_id === S.me.id);
@@ -652,6 +735,7 @@ function tripHTML(t) {
   <div id="gal"><div class="skel" style="aspect-ratio:3/2;max-width:540px"></div></div>
   <div><div class="eyebrow">${preview ? "Instant plan · not saved yet" : `${auto ? "Planned" : "Wander-polished plan"} by ${esc(who(t.created_by).name)} · ${esc(ago(t.created_at))}`} · ${esc(STYLES[f.style]?.name || "")}</div><h2 class="section" style="font-size:26px;margin-top:4px">${esc(p.headline || "")}</h2></div>
   ${p.wanderSays ? `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says</div><p>${esc(p.wanderSays)}</p></div></div>` : ""}
+  ${AI_ON ? `<div id="hotTake"><button class="btn small" id="hotTakeBtn" type="button">🎤 Get Wander's hot take</button></div>` : ""}
   ${auto && AI_ON ? `<div class="card flat" id="polishBox"><div class="vs" style="justify-content:space-between"><div><b>Want hand-picked hotels and restaurants?</b><div class="small muted">${polished ? "Someone already had Wander polish this exact trip." : "Wander names specific hotels and restaurants. Uses a little AI credit (about ₹1), takes ~20s, and the whole crew can reuse it."}</div></div><button class="btn small go" id="polishBtn" type="button">${polished ? "Open Wander's version" : "✨ Ask Wander to polish"}</button></div></div>` : ""}
   ${p.fitsBudget === false || p.tradeoffs ? `<div class="banner">${p.fitsBudget === false ? "<b>Heads up:</b> this plan runs over the budget. " : ""}${esc(p.tradeoffs || "")}</div>` : ""}
   ${(p.speciality || []).length ? `<div class="card"><h3>Famous for</h3><div class="chips">${p.speciality.map(s => `<a class="chip" href="${esc(G.search(s + " " + city))}" target="_blank" rel="noopener">${esc(s)}</a>`).join("")}</div></div>` : ""}
@@ -670,7 +754,8 @@ function tripHTML(t) {
     ${(x.plan || []).map(s => `<div class="slot"><b>${esc(s.time)}</b><span>${s.name ? placeLink(s.name, s.area, d) + " · " : ""}${esc(s.what)}${num(s.cost) ? ` <span class="mono small muted">~${inr(s.cost)}</span>` : ""}</span></div>`).join("")}
     ${(x.eat || []).length ? `<div class="eat">${x.eat.map(e => `<span>🍜 ${placeLink(e.name, e.area, d)}${e.order ? ": " + esc(e.order) : ""}</span>`).join("")}</div>` : ""}
   </div></div>`).join("")}</div>
-  ${(p.mustEat || []).length ? `<div class="card"><h3>Must-eat list</h3>${p.mustEat.map(m => `<div class="slot"><b>${esc(m.dish)}</b><span>${m.name ? placeLink(m.name, m.area, d) : ""}${m.area ? ` <span class="small muted">${esc(m.area)}</span>` : ""}</span></div>`).join("")}</div>` : ""}
+  ${extrasHTML(d, f, p)}
+  ${(p.mustEat || []).length && p.source !== "auto" ? `<div class="card"><h3>Must-eat list</h3>${p.mustEat.map(m => `<div class="slot"><b>${esc(m.dish)}</b><span>${m.name ? placeLink(m.name, m.area, d) : ""}${m.area ? ` <span class="small muted">${esc(m.area)}</span>` : ""}</span></div>`).join("")}</div>` : ""}
   ${splitCard(p.budget || t.estimate?.breakdown || {}, num(f.budget), "Budget split, per person", `Group total about ${inr(total * people)}. Engine estimate for this style was ${lakh(t.estimate?.typical)}.`)}
   <div class="card"><h3>Book it: compare the sites</h3><p class="muted small" style="margin:0">Links open with your route and dates filled in where the site allows it.</p>
     ${[["Getting there", R.transport], ["Stays", R.stays], ["Activities", R.things]].map(([h, rows]) => `<div class="eyebrow" style="margin-top:6px">${h}</div><div class="tablewrap"><table><thead><tr><th>Site</th><th>Best for</th><th>Watch for</th><th></th></tr></thead><tbody>${rows.map(r => `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.best)}</td><td>${esc(r.watch)}</td><td><a class="btn small" href="${esc(r.url)}" target="_blank" rel="noopener">Open</a></td></tr>`).join("")}</tbody></table></div>`).join("")}
@@ -700,6 +785,7 @@ function bindTrip(t0) {
   const c = $("#copyEnq"); if (c) c.onclick = async () => { const ta = $("#enq"); try { await navigator.clipboard.writeText(ta.value); toast("Enquiry copied"); } catch { ta.select(); toast("Selected. Copy it from there."); } };
   const sv = $("#saveTrip"); if (sv) sv.onclick = async () => { sv.disabled = true; try { const saved = await saveTrip(t); toast("Saved to the trip board"); openTrip(saved.id); } catch (e) { sv.disabled = false; toast(e.message); } };
   const pb = $("#polishBtn"); if (pb) pb.onclick = () => polishPlan(t);
+  bindHotTake(t); if (DEST[t.dest_key]) bindGems(DEST[t.dest_key]);
   const s = $("#shareChat"); if (s) s.onclick = async () => { if (!t.id) { try { t = await saveTrip(t); } catch (e) { return toast(e.message); } } sendChat(`Check out the ${t.form?.days}-day ${(DEST[t.dest_key] || {}).name} plan on the Trips tab: ${lakh(t.total)} per person. Vote if you're in ♥`); toast("Posted to the chat"); };
   const r = $("#regen"); if (r) r.onclick = () => { closeSheet(); setTab("plan"); toast("Change the dates or style above, then open the destination again"); };
   const del = $("#delTrip"); if (del) { let armed = false; del.onclick = async () => { if (!armed) { armed = true; del.textContent = "Tap again to delete"; return; } try { await DB.remove("trips", { id: t.id }); closeSheet(); toast("Trip deleted"); reload("trips"); } catch (e) { toast(e.message); } }; }
@@ -857,6 +943,10 @@ const COMMANDS = [
   { cmd: "/ask", args: "your question", desc: "Ask Wander (AI) in the chat", ai: true, run: a => { if (!a) return toast("Try: /ask best sunset spot in Bali?"); const replyText = replyTo ? snippet(msgById(replyTo)) : ""; sendChat("@wander " + a); askWander("chat", { question: a, replyText }); } },
   { cmd: "/aipoll", args: "topic", desc: "Wander writes a poll for you", ai: true, run: a => askWander("aipoll", { topic: a || "our trip" }, "Wander is cooking up a poll…") },
   { cmd: "/roast", args: "(optional) who or what", desc: "Wander playfully roasts the plan", ai: true, run: a => askWander("roast", { target: a || "the crew's planning so far" }, "Wander is sharpening the jokes…") },
+  { cmd: "/roles", args: "", desc: "Wander assigns everyone a trip role", ai: true, run: () => askWander("fun", { kind: "roles", names: [...new Set([S.me.id, ...Object.keys(S.profiles)])].map(id => who(id).name).slice(0, 12) }, "Wander is handing out job titles…") },
+  { cmd: "/excuse", args: "(optional) for whom", desc: "A leave-request excuse for the boss", ai: true, run: a => askWander("fun", { kind: "excuse", target: a || "my manager" }, "Wander is drafting your alibi…") },
+  { cmd: "/caption", args: "(optional) vibe", desc: "Instagram captions for the trip", ai: true, run: a => askWander("fun", { kind: "caption", vibe: a || "" }, "Wander is writing captions…") },
+  { cmd: "/hype", args: "", desc: "A hype message to get everyone booking", ai: true, run: () => askWander("fun", { kind: "hype" }, "Wander is warming up the crowd…") },
   { cmd: "/pick", args: "a | b | c   (blank = a crew member)", desc: "Let fate pick for you", run: a => { let from = parseOpts(a); if (!from.length) from = [...new Set([S.me.id, ...Object.keys(S.profiles)])].map(id => who(id).name); if (from.length < 2) return toast("Give at least two options: /pick pizza | biryani"); const value = from[Math.floor(Math.random() * from.length)]; return postChat({ kind: "card", body: "Picked " + value, data: { type: "pick", from: from.slice(0, 12), value, label: "/pick" } }); } },
   { cmd: "/roll", args: "(sides, default 6)", desc: "Roll a dice", run: a => { const sides = Math.min(1000, Math.max(2, parseInt(a) || 6)); const value = 1 + Math.floor(Math.random() * sides); return postChat({ kind: "card", body: `Rolled ${value} (d${sides})`, data: { type: "roll", sides, value, label: "/roll" } }); } },
   { cmd: "/coin", args: "", desc: "Flip a coin", run: () => { const value = Math.random() < .5 ? "Heads" : "Tails"; return postChat({ kind: "card", body: value, data: { type: "coin", value, label: "/coin" } }); } },
@@ -865,16 +955,20 @@ const COMMANDS = [
   { cmd: "/trip", args: "", desc: "Share the leading trip", run: () => { const t = [...S.trips].sort((a, b) => voteCount(b.id) - voteCount(a.id))[0]; if (!t) return toast("No trips on the board yet."); return postChat({ kind: "card", body: "Leading trip: " + DEST[t.dest_key]?.name, data: { type: "trip", id: t.id, name: DEST[t.dest_key]?.name, days: t.form?.days, total: t.total, votes: voteCount(t.id), label: "/trip" } }); } },
   { cmd: "/help", args: "", desc: "Show all commands", run: () => openCmdMenu("/") },
 ];
-let cmdSel = 0;
+let cmdSel = 0, cmdFilter = "all";
 function openCmdMenu(text) {
   const menu = $("#cmdMenu"); const q = text.split(/\s/)[0].toLowerCase();
-  const list = COMMANDS.filter(c => (!c.ai || AI_ON) && c.cmd.startsWith(q === "/help" ? "/" : q));
+  if (text.length > 1) cmdFilter = "all";
+  const list = COMMANDS.filter(c => (!c.ai || AI_ON) && (cmdFilter !== "ai" || c.ai) && c.cmd.startsWith(q === "/help" ? "/" : q));
   if (!text.startsWith("/") || text.includes(" ") || !list.length) { menu.hidden = true; return; }
   cmdSel = Math.min(cmdSel, list.length - 1);
   menu.innerHTML = list.map((c, i) => `<button type="button" role="option" aria-selected="${i === cmdSel}" data-cmd="${c.cmd}"><code>${c.cmd}</code><b>${esc(c.desc)}${c.ai ? " ✨" : ""}</b><span>${esc(c.args || "no arguments")}</span></button>`).join("");
   menu.hidden = false;
 }
 $("#chatInput").addEventListener("input", e => { cmdSel = 0; openCmdMenu(e.target.value); });
+$("#slashBtn").onclick = () => { const i = $("#chatInput"); if ($("#cmdMenu").hidden || cmdFilter !== "all") { cmdFilter = "all"; i.value = "/"; openCmdMenu("/"); } else { $("#cmdMenu").hidden = true; i.value = ""; } i.focus(); };
+$("#wanderBtn").onclick = () => { const i = $("#chatInput"); if ($("#cmdMenu").hidden || cmdFilter !== "ai") { cmdFilter = "ai"; i.value = "/"; openCmdMenu("/"); } else { $("#cmdMenu").hidden = true; i.value = ""; cmdFilter = "all"; } i.focus(); };
+$("#reactBtn").onclick = () => { const r = $("#reactRow"); r.hidden = !r.hidden; $("#reactBtn").setAttribute("aria-pressed", !r.hidden); };
 $("#chatInput").addEventListener("keydown", e => {
   const menu = $("#cmdMenu"); if (menu.hidden) return;
   const items = $$("button", menu);
@@ -885,7 +979,7 @@ $("#chatInput").addEventListener("keydown", e => {
 $("#cmdMenu").addEventListener("click", e => { const b = e.target.closest("[data-cmd]"); if (!b) return; const c = COMMANDS.find(x => x.cmd === b.dataset.cmd); const i = $("#chatInput"); $("#cmdMenu").hidden = true; if (!c.args) { i.value = ""; c.run(""); } else { i.value = c.cmd + " "; i.focus(); } });
 
 $("#chatForm").onsubmit = async e => {
-  e.preventDefault(); const i = $("#chatInput"); const t = i.value.trim(); if (!t) return; i.value = ""; $("#cmdMenu").hidden = true;
+  e.preventDefault(); const i = $("#chatInput"); const t = i.value.trim(); if (!t) return; i.value = ""; $("#cmdMenu").hidden = true; cmdFilter = "all";
   if (t.startsWith("/")) {
     const [c0, ...rest] = t.split(" "); const c = COMMANDS.find(x => x.cmd === c0.toLowerCase());
     if (!c) return toast(`Unknown command ${c0}. Type / to see them all.`);
