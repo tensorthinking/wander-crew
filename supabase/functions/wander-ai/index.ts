@@ -93,28 +93,69 @@ const recentLines = (p: any) => (p.recent || []).slice(-6).map((m: any) => `${S(
 
 // ---------------------------------------------------------------- live prices (SerpApi reads Google Flights / Google Hotels,
 // the same pages our links open, so the numbers match). Shared cache keeps the free quota alive.
-const PRICE_TTL_MS = 6 * 60 * 60 * 1000;
+const HOUR = 3600_000;
 const memCache = new Map<string, { at: number; data: unknown }>();
 const ISO = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? String(v) : "");
 const IATA = (v: unknown) => (/^[A-Z]{3}$/.test(String(v || "").toUpperCase()) ? String(v).toUpperCase() : "");
+const DAILY_LIVE = Number(Deno.env.get("LIVE_DAILY_LIMIT") || 15); // new (uncached) lookups per person per day
+const MIN_REFRESH_MS = HOUR;                                       // Refresh can't re-spend within an hour
 
-async function cached(admin: any, key: string, fresh: boolean, fetcher: () => Promise<unknown>) {
+// Far-off trips barely move, so keep their prices longer: <2 weeks 3h, <2 months 12h, else 24h.
+function ttlFor(dateIso: string) {
+  const days = (new Date(dateIso + "T00:00:00Z").getTime() - Date.now()) / 864e5;
+  return days < 14 ? 3 * HOUR : days < 60 ? 12 * HOUR : 24 * HOUR;
+}
+
+async function readCache(admin: any, key: string) {
   const m = memCache.get(key);
-  if (!fresh && m && Date.now() - m.at < PRICE_TTL_MS) return { ...(m.data as object), checkedAt: new Date(m.at).toISOString() };
-  if (!fresh) {
-    try {
-      const { data: row } = await admin.from("price_cache").select("data, fetched_at").eq("key", key).maybeSingle();
-      if (row && Date.now() - new Date(row.fetched_at).getTime() < PRICE_TTL_MS) {
-        memCache.set(key, { at: new Date(row.fetched_at).getTime(), data: row.data });
-        return { ...row.data, checkedAt: row.fetched_at };
-      }
-    } catch { /* cache table optional */ }
+  if (m) return m;
+  try {
+    const { data: row } = await admin.from("price_cache").select("data, fetched_at").eq("key", key).maybeSingle();
+    if (row) { const hit = { at: new Date(row.fetched_at).getTime(), data: row.data }; memCache.set(key, hit); return hit; }
+  } catch { /* optional */ }
+  return null;
+}
+
+async function spendOne(admin: any, userId: string) {
+  const day = new Date().toISOString().slice(0, 10);
+  try {
+    const { data: row } = await admin.from("price_usage").select("n").eq("user_id", userId).eq("day", day).maybeSingle();
+    const n = (row?.n || 0) + 1;
+    if (n > DAILY_LIVE) throw new Error(`You've used your ${DAILY_LIVE} live price checks for today. Prices others already checked still show for free.`);
+    await admin.from("price_usage").upsert({ user_id: userId, day, n });
+  } catch (e) {
+    if (/live price checks/.test(String((e as Error).message))) throw e; // table missing etc. -> don't block
   }
+}
+
+let quotaMemo: { at: number; left: number | null } = { at: 0, left: null };
+async function quotaLeft() {
+  if (Date.now() - quotaMemo.at < 10 * 60_000) return quotaMemo.left;
+  try {
+    const r = await fetch("https://serpapi.com/account.json?api_key=" + encodeURIComponent(Deno.env.get("SERPAPI_KEY") || ""));
+    const j = await r.json();
+    const left = Number.isFinite(Number(j.total_searches_left)) ? Number(j.total_searches_left) : Number.isFinite(Number(j.plan_searches_left)) ? Number(j.plan_searches_left) : null;
+    quotaMemo = { at: Date.now(), left };
+  } catch { quotaMemo = { at: Date.now(), left: null }; }
+  return quotaMemo.left;
+}
+
+// peek: return a cached price only (free). fresh: re-fetch, but only if the cached one is over an hour old.
+async function cached(ctx: { admin: any; userId: string }, key: string, dateIso: string, p: any, fetcher: () => Promise<unknown>) {
+  if (!Deno.env.get("SERPAPI_KEY")) throw new Error("LIVE_OFF");
+  const hit = await readCache(ctx.admin, key);
+  const age = hit ? Date.now() - hit.at : Infinity;
+  const valid = age < ttlFor(dateIso);
+  const out = (h: { at: number; data: unknown }, extra = {}) => ({ ...(h.data as object), checkedAt: new Date(h.at).toISOString(), ...extra });
+  if (p.peek) return hit && valid ? out(hit, { cached: true }) : { miss: true };
+  if (hit && valid && (!p.fresh || age < MIN_REFRESH_MS)) return out(hit, { cached: true, quotaLeft: await quotaLeft() });
+  await spendOne(ctx.admin, ctx.userId);
   const data = await fetcher();
   const at = Date.now();
   memCache.set(key, { at, data });
-  try { await admin.from("price_cache").upsert({ key, data, fetched_at: new Date(at).toISOString() }); } catch { /* optional */ }
-  return { ...(data as object), checkedAt: new Date(at).toISOString() };
+  try { await ctx.admin.from("price_cache").upsert({ key, data, fetched_at: new Date(at).toISOString() }); } catch { /* optional */ }
+  quotaMemo.at = 0;
+  return out({ at, data }, { quotaLeft: await quotaLeft() });
 }
 
 async function serp(params: Record<string, string>) {
@@ -149,12 +190,12 @@ function slimFlight(o: any) {
   };
 }
 
-async function liveFlights(p: any, admin: any) {
+async function liveFlights(p: any, ctx: any) {
   const from = IATA(p.from), to = IATA(p.to), out = ISO(p.out), ret = ISO(p.ret);
   const oneway = !!p.oneway || !ret;
   if (!from || !to || !out) throw new Error("Live prices need airport codes and a date.");
   const key = `fl:${from}:${to}:${out}:${oneway ? "ow" : ret}`;
-  return cached(admin, key, !!p.fresh, async () => {
+  return cached(ctx, key, out, p, async () => {
     const j: any = await serp({ engine: "google_flights", departure_id: from, arrival_id: to, outbound_date: out, ...(oneway ? { type: "2" } : { type: "1", return_date: ret }), adults: "1", travel_class: "1" });
     const all = [...(j.best_flights || []), ...(j.other_flights || [])].filter((o: any) => N(o.price) > 0).map(slimFlight).sort((a, b) => a.price - b.price);
     const ins = j.price_insights || {};
@@ -167,13 +208,13 @@ async function liveFlights(p: any, admin: any) {
   });
 }
 
-async function liveHotels(p: any, admin: any) {
-  const q = S(p.q, 140).trim(), ci = ISO(p.in), co = ISO(p.out);
+async function liveHotels(p: any, ctx: any) {
+  const q = S(p.q, 140).replace(/\s+/g, " ").trim(), ci = ISO(p.in), co = ISO(p.out);
   const adults = String(Math.min(4, Math.max(1, N(p.adults) || 2)));
   if (!q || !ci || !co) throw new Error("Live hotel prices need a place and dates.");
   const maxPrice = N(p.maxPrice);
   const key = `ht:${q.toLowerCase()}:${ci}:${co}:${adults}:${maxPrice || 0}`;
-  return cached(admin, key, !!p.fresh, async () => {
+  return cached(ctx, key, ci, p, async () => {
     const j: any = await serp({ engine: "google_hotels", q, check_in_date: ci, check_out_date: co, adults, ...(maxPrice ? { max_price: String(maxPrice) } : {}) });
     const url = S(j.search_metadata?.google_hotels_url, 1500);
     if (!j.properties && j.name) { // the query matched one specific hotel: return its per-site prices
@@ -193,7 +234,7 @@ async function liveHotels(p: any, admin: any) {
 const tasks: Record<string, (p: any, ctx: Ctx) => Promise<unknown>> = {
   async prices(p, ctx) {
     try {
-      return p.kind === "hotels" ? await liveHotels(p, ctx.admin) : await liveFlights(p, ctx.admin);
+      return p.kind === "hotels" ? await liveHotels(p, ctx) : await liveFlights(p, ctx);
     } catch (e) {
       if (String((e as Error).message) === "LIVE_OFF") return { off: true };
       throw e;

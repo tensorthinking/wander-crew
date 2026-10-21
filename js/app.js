@@ -172,7 +172,8 @@ async function ai(task, payload) {
 /* ------------------------------------------------------------------ live prices (Google Flights / Hotels via the server) */
 const LIVE_TTL = 6 * 3600e3;
 async function livePrices(payload) {
-  const ck = "live:" + JSON.stringify(payload), mem = store.get("live", {});
+  const { fresh: _f, peek: _p, ...base } = payload;
+  const ck = "live:" + JSON.stringify(base), mem = store.get("live", {});
   if (!payload.fresh && mem[ck] && Date.now() - mem[ck].at < LIVE_TTL) return mem[ck].data;
   const { data, error } = await sb.functions.invoke("wander-ai", { body: { task: "prices", payload } });
   if (error) {
@@ -183,7 +184,7 @@ async function livePrices(payload) {
   }
   if (data && data.error) throw new Error(data.error);
   const res = data.result;
-  if (res && !res.off) { const { fresh, ...k } = payload; const key = "live:" + JSON.stringify(k); const c = store.get("live", {}); const ks = Object.keys(c); if (ks.length > 40) delete c[ks[0]]; c[key] = { at: Date.now(), data: res }; store.set("live", c); }
+  if (res && !res.off && !res.miss) { const { fresh, peek, ...k } = payload; const key = "live:" + JSON.stringify(k); const c = store.get("live", {}); const ks = Object.keys(c); if (ks.length > 40) delete c[ks[0]]; c[key] = { at: Date.now(), data: res }; store.set("live", c); }
   return res;
 }
 const IATA3 = v => /^[A-Z]{3}$/.test(String(v || "")) ? v : "";
@@ -212,8 +213,13 @@ function liveFlightResult(r, people) {
   return `<div class="live-top"><div><div class="small muted">Cheapest ${tripWord(r.oneway)}, per person</div><div class="live-price mono">${inr(r.cheapest)}</div><div class="small muted">× ${people} travellers = <b>${inr(r.cheapest * people)}</b></div></div>${lvl}</div>
     ${r.typical ? `<div class="small muted">Usually ${inr(r.typical[0])} to ${inr(r.typical[1])} on this route, says Google.</div>` : ""}
     <div class="fl-opts">${r.options.slice(0, 4).map(o => `<div class="fl-opt">${o.logo ? `<img src="${esc(o.logo)}" alt="" loading="lazy">` : `<span class="fl-noimg">✈</span>`}<div class="fl-mid"><b>${esc(o.airlines.join(", "))}</b><span class="small muted">${esc(timeOnly(o.depart))}${o.arrive ? " → " + esc(timeOnly(o.arrive)) : ""} · ${esc(o.duration)} · ${o.stops ? o.stops + " stop" + (o.stops > 1 ? "s" : "") + (o.via.length ? " via " + esc(o.via.join(", ")) : "") : "non-stop"}</span></div><b class="mono">${inr(o.price)}</b></div>`).join("")}</div>
-    <div class="live-foot"><span class="small muted">Checked ${esc(agoShort(r.checkedAt))}. Fares change often.</span><button class="linkbtn small" type="button" data-livego data-fresh="1">Refresh</button></div>
+    ${liveFootHTML(r, "Fares change often.")}
     ${r.url ? `<a class="btn small block" href="${esc(r.url)}" target="_blank" rel="noopener">Open this exact search on Google Flights ↗</a>` : ""}`;
+}
+function liveFootHTML(r, note) {
+  const old = Date.now() - new Date(r.checkedAt).getTime() > 3600e3;
+  const q = Number.isFinite(r.quotaLeft) ? ` · ${r.quotaLeft} live checks left this month` : "";
+  return `<div class="live-foot"><span class="small muted">Checked ${esc(agoShort(r.checkedAt))}. ${esc(note)}${esc(q)}</span>${old ? `<button class="linkbtn small" type="button" data-livego data-fresh="1">Refresh</button>` : ""}</div>`;
 }
 function liveHotelBtn(q, ci, co, label, opts = {}) {
   if (!LIVE) return "";
@@ -223,7 +229,7 @@ function liveHotelResult(r) {
   if (r.off) return `<p class="small muted" style="margin:0">Live prices aren't switched on yet. Use the Google Hotels link for today's rates.</p>`;
   const nights = Math.max(1, Math.round((new Date(r.out) - new Date(r.in)) / 864e5));
   const head = `<div class="small muted">${esc(fmtDay(r.in))} to ${esc(fmtDay(r.out))}, ${nights} night${nights > 1 ? "s" : ""}, ${r.adults} adults per room</div>`;
-  const foot = `<div class="live-foot"><span class="small muted">Checked ${esc(agoShort(r.checkedAt))}</span><button class="linkbtn small" type="button" data-livego data-fresh="1">Refresh</button></div>${r.url ? `<a class="btn small block" href="${esc(r.url)}" target="_blank" rel="noopener">Open these dates on Google Hotels ↗</a>` : ""}`;
+  const foot = `${liveFootHTML(r, "")}${r.url ? `<a class="btn small block" href="${esc(r.url)}" target="_blank" rel="noopener">Open these dates on Google Hotels ↗</a>` : ""}`;
   if (r.kind === "hotel") {
     return `${head}<div class="live-top"><div><div class="small muted">${esc(r.name)}, lowest per night</div><div class="live-price mono">${r.perNight ? inr(r.perNight) : "n/a"}</div>${r.total ? `<div class="small muted">${inr(r.total)} for the stay</div>` : ""}</div>${r.rating ? `<span class="pill-lvl">★ ${r.rating}</span>` : ""}</div>
       ${r.sites.length ? `<div class="fl-opts">${r.sites.map(s => `<a class="fl-opt" href="${esc(s.link)}" target="_blank" rel="noopener"><div class="fl-mid"><b>${esc(s.source)}</b><span class="small muted">${s.total ? inr(s.total) + " total" : ""}</span></div><b class="mono">${inr(s.perNight)}/night</b></a>`).join("")}</div>` : ""}${foot}`;
@@ -231,38 +237,49 @@ function liveHotelResult(r) {
   if (r.empty) return `${head}<p class="small muted" style="margin:0">No live rates for these dates yet.</p>${foot}`;
   return `${head}<div class="fl-opts">${r.hotels.map(h => `<a class="fl-opt" href="${esc(h.link || G.hotels(h.name + " " + r.q))}" target="_blank" rel="noopener">${h.thumb ? `<img class="ht-thumb" src="${esc(h.thumb)}" alt="" loading="lazy">` : ""}<div class="fl-mid"><b>${esc(h.name)}</b><span class="small muted">${h.rating ? "★ " + h.rating + (h.reviews ? " (" + h.reviews.toLocaleString("en-IN") + ")" : "") : esc(h.type)}${h.total ? " · " + inr(h.total) + " total" : ""}</span></div><b class="mono">${inr(h.perNight)}<small>/night</small></b></a>`).join("")}</div>${foot}`;
 }
+function livePayload(box) {
+  const isFl = box.dataset.live === "fl";
+  return isFl
+    ? { kind: "flights", from: box.dataset.from, to: box.dataset.to, out: box.dataset.out, ret: box.dataset.ow === "1" ? "" : box.dataset.ret, oneway: box.dataset.ow === "1" }
+    : { kind: "hotels", q: box.dataset.q, in: box.dataset.in, out: box.dataset.out, adults: 2 };
+}
+function renderLive(box, r) {
+  const isFl = box.dataset.live === "fl", body = isFl ? $(".live-body", box) : box;
+  box.dataset.loaded = 1;
+  body.innerHTML = isFl ? liveFlightResult(r, num(box.dataset.people) || 1) : liveHotelResult(r);
+  const d = DEST[box.dataset.dest];
+  if (isFl && d && r.cheapest) { // re-total the trip with the real fare instead of our flight estimate
+    const f = { ...(S.recForm || S.form), start: box.dataset.out, people: num(box.dataset.people), trip: r.oneway ? "oneway" : "round" };
+    const est = E.estimate(d, f), total = est.typical - est.breakdown.flights + r.cheapest;
+    body.insertAdjacentHTML("afterbegin", `<div class="banner live-total">With this live fare, the trip comes to about <b>${inr(total)}</b> per person (was ${inr(est.typical)} on our estimate).</div>`);
+  }
+}
+// Free: show a price someone in the crew already checked, without spending a search.
+async function peekLive(box) {
+  if (!LIVE || box.dataset.peeked === box.dataset.ow + "|" + box.dataset.q) return;
+  box.dataset.peeked = box.dataset.ow + "|" + box.dataset.q;
+  try { const r = await livePrices({ ...livePayload(box), peek: true }); if (r && !r.miss && !r.off) renderLive(box, r); } catch {}
+}
+if (window.MutationObserver) new MutationObserver(() => $$("#sheetPanel [data-live]").forEach(peekLive)).observe($("#sheetPanel"), { childList: true, subtree: true });
 document.addEventListener("click", async e => {
   const tb = e.target.closest("[data-livetrip]");
-  if (tb) {
+  if (tb) { // switching trip type never spends a search: it shows a cached price if there is one, else the estimate
     const card = tb.closest("[data-live]"); const ow = tb.dataset.livetrip === "oneway";
-    card.dataset.ow = ow ? 1 : 0; $$("[data-livetrip]", card).forEach(x => x.setAttribute("aria-selected", x === tb));
+    card.dataset.ow = ow ? 1 : 0; delete card.dataset.loaded; $$("[data-livetrip]", card).forEach(x => x.setAttribute("aria-selected", x === tb));
     const d = DEST[card.dataset.dest], f = S.recForm || S.form;
     $(".live-body", card).innerHTML = d ? liveIdle(d, { ...f, start: card.dataset.out, people: num(card.dataset.people) }, ow) : "";
-    if (card.dataset.loaded) $("[data-livego]", card).click();
+    peekLive(card);
     return;
   }
   const go = e.target.closest("[data-livego]"); if (!go) return;
   const box = go.closest("[data-live]"); if (!box) return;
   const isFl = box.dataset.live === "fl";
   const body = isFl ? $(".live-body", box) : box;
-  const payload = isFl
-    ? { kind: "flights", from: box.dataset.from, to: box.dataset.to, out: box.dataset.out, ret: box.dataset.ow === "1" ? "" : box.dataset.ret, oneway: box.dataset.ow === "1" }
-    : { kind: "hotels", q: box.dataset.q, in: box.dataset.in, out: box.dataset.out, adults: 2 };
+  const payload = livePayload(box);
   if (go.dataset.fresh) payload.fresh = true;
   body.innerHTML = `<div class="live-loading"><span class="spin"></span> Checking ${isFl ? "Google Flights" : "Google Hotels"}…</div>`;
-  try {
-    const r = await livePrices(payload);
-    box.dataset.loaded = 1;
-    body.innerHTML = isFl ? liveFlightResult(r, num(box.dataset.people) || 1) : liveHotelResult(r);
-    const d = DEST[box.dataset.dest];
-    if (isFl && d && r.cheapest) { // re-total the trip with the real fare instead of our flight estimate
-      const f = { ...(S.recForm || S.form), start: box.dataset.out, people: num(box.dataset.people), trip: r.oneway ? "oneway" : "round" };
-      const est = E.estimate(d, f), total = est.typical - est.breakdown.flights + r.cheapest;
-      body.insertAdjacentHTML("afterbegin", `<div class="banner live-total">With this live fare, the trip comes to about <b>${inr(total)}</b> per person (was ${inr(est.typical)} on our estimate).</div>`);
-    }
-  } catch (err) {
-    body.innerHTML = `<p class="small" style="margin:0;color:var(--bad)">${esc(err.message)}</p><button class="btn small" type="button" data-livego>Try again</button>`;
-  }
+  try { renderLive(box, await livePrices(payload)); }
+  catch (err) { body.innerHTML = `<p class="small" style="margin:0;color:var(--bad)">${esc(err.message)}</p><button class="btn small" type="button" data-livego>Try again</button>`; }
 });
 
 /* ------------------------------------------------------------------ auth */

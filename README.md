@@ -37,4 +37,10 @@ Tap your profile photo for Settings. Everything is saved on that device: theme, 
 The planner's numbers are estimates from a cost model. For real fares and hotel rates, the app asks SerpApi, which reads Google Flights and Google Hotels, the same pages the links open, so the numbers match.
 1. Sign up free at https://serpapi.com (250 searches a month free) and copy your API key.
 2. In Supabase: Edge Functions > Secrets > add `SERPAPI_KEY` with that key.
-Results are cached and shared across the crew for 6 hours, so the free quota goes a long way. Live prices don't count against the 100 AI requests per day.
+How the quota is protected:
+- Nothing is fetched until someone taps "Check live price".
+- A price anyone in the crew already checked shows up automatically for everyone, for free.
+- Prices are kept for 24 hours for trips 2+ months away, 12 hours within 2 months, 3 hours within 2 weeks.
+- Refresh only spends a search if the price is over an hour old. Switching one way / round trip never spends one by itself.
+- Each person gets 15 new lookups a day (change with the `LIVE_DAILY_LIMIT` secret). The searches left this month show under each result.
+Live prices don't count against the 100 AI requests per day.
