@@ -1255,6 +1255,22 @@ $("#searchResults").addEventListener("click", e => {
 document.addEventListener("click", e => { if (!e.target.closest("#searchBox")) closeSearch(); });
 $("#searchBtn").onclick = () => { setTab("plan"); setTimeout(() => { $("#searchInput").focus(); $("#searchBox").scrollIntoView({ block: "start" }); }, 60); };
 
+/* ------------------------------------------------------------------ theme */
+const darkMQ = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : { matches: false, addEventListener() {} };
+const themeChoice = () => { const t = (() => { try { return localStorage.getItem("wc:theme"); } catch { return null; } })(); return t === "light" || t === "dark" ? t : "system"; };
+const effectiveTheme = () => { const c = themeChoice(); return c === "system" ? (darkMQ.matches ? "dark" : "light") : c; };
+function applyTheme(choice) {
+  try { if (choice === "system") localStorage.removeItem("wc:theme"); else localStorage.setItem("wc:theme", choice); } catch {}
+  if (choice === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", choice);
+  const eff = effectiveTheme();
+  $("#themeIcon").textContent = eff === "dark" ? "☀️" : "🌙";
+  $("#themeBtn").setAttribute("aria-label", eff === "dark" ? "Switch to light theme" : "Switch to dark theme");
+  $$('meta[name="theme-color"]').forEach(m => m.setAttribute("content", eff === "dark" ? "#0F1420" : "#F3F5F9"));
+}
+$("#themeBtn").onclick = () => { applyTheme(effectiveTheme() === "dark" ? "light" : "dark"); toast(effectiveTheme() === "dark" ? "Dark mode 🌙" : "Light mode ☀️"); };
+darkMQ.addEventListener && darkMQ.addEventListener("change", () => { if (themeChoice() === "system") applyTheme("system"); });
+applyTheme(themeChoice());
+
 /* ------------------------------------------------------------------ tabs & account */
 function setTab(t) {
   S.tab = t; $$(".tab").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t));
@@ -1268,10 +1284,12 @@ $$(".tab").forEach(b => b.onclick = () => setTab(b.dataset.tab));
 $("#meBtn").onclick = () => {
   const old = $(".menu"); if (old) return old.remove();
   const m = document.createElement("div"); m.className = "menu";
-  m.innerHTML = `<div><b>${esc(S.me.name)}</b><div class="small muted">${esc(S.me.email || "Preview mode")}</div></div>${LIVE ? `<button class="btn small" id="signOut" type="button">Sign out</button>` : ""}<button class="btn small" id="closeMenu" type="button">Close</button>`;
+  const tc = themeChoice();
+  m.innerHTML = `<div><b>${esc(S.me.name)}</b><div class="small muted">${esc(S.me.email || "Preview mode")}</div></div><div><div class="eyebrow" style="margin-bottom:6px">Theme</div><div class="segment" id="themeSeg">${[["light", "☀️ Light"], ["dark", "🌙 Dark"], ["system", "📱 Auto"]].map(([k, l]) => `<button type="button" data-theme-pick="${k}" aria-selected="${tc === k}">${l}</button>`).join("")}</div></div>${LIVE ? `<button class="btn small" id="signOut" type="button">Sign out</button>` : ""}<button class="btn small" id="closeMenu" type="button">Close</button>`;
   document.body.append(m);
   const so = $("#signOut", m); if (so) so.onclick = async () => { await sb.auth.signOut(); location.reload(); };
   $("#closeMenu", m).onclick = () => m.remove();
+  $("#themeSeg", m).onclick = e => { const b = e.target.closest("[data-theme-pick]"); if (!b) return; applyTheme(b.dataset.themePick); $$("[data-theme-pick]", m).forEach(x => x.setAttribute("aria-selected", x === b)); };
 };
 
 boot().catch(e => { console.error(e); toast("Something broke while starting: " + e.message); });

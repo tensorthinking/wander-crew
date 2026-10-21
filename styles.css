@@ -557,3 +557,18 @@ h3{font-size:16px}
   .place-row{padding:7px 9px}
   .day .body .vs h3{font-size:14.5px}
 }
+
+/* ---------- explicit theme choice (overrides the phone's setting) ---------- */
+:root[data-theme="light"]{
+  --bg:#F3F5F9; --surface:#FFFFFF; --surface-2:#F5F7FB; --ink:#1B2333; --muted:#667085; --line:#E3E8F0;
+  --mango:#F2992E; --lagoon:#1E9C9C; --hibiscus:#E0517A; --grape:#6A5AE0; --leaf:#239E62; --sun:#F6CB45;
+  --good:#1E9C5F; --warn:#C27A06; --bad:#D04A68;
+  --shadow:0 1px 2px rgba(17,24,39,.05),0 8px 24px -12px rgba(17,24,39,.18); color-scheme:light }
+:root[data-theme="dark"]{
+  --bg:#0F1420; --surface:#171D2B; --surface-2:#1D2434; --ink:#E6E9F0; --muted:#98A2B5; --line:#283044;
+  --mango:#F0A64A; --lagoon:#3BB5B5; --hibiscus:#EE6E91; --grape:#8F83F2; --leaf:#45C084; --sun:#F2D06B;
+  --good:#45C084; --warn:#E7AE4B; --bad:#EE6E91;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 28px -14px rgba(0,0,0,.6); color-scheme:dark }
+#themeBtn span{font-size:17px;line-height:1;transition:transform .3s}
+#themeBtn:active span{transform:rotate(40deg) scale(.9)}
+@media (max-width:380px){.online-strip .count{display:none}}
