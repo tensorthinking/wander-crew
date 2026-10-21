@@ -264,6 +264,26 @@ tr:last-child td{border-bottom:0}
 .access-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border-radius:12px;background:var(--surface-2);min-width:0}
 .access-row span{overflow:hidden;text-overflow:ellipsis}
 
+/* search */
+.search-btn{display:grid;place-items:center;background:var(--surface);border:1.5px solid var(--line);color:var(--ink)}
+.searchbox{position:relative;z-index:5}
+.search-field{display:flex;align-items:center;gap:10px;background:var(--surface);border:2px solid var(--line);border-radius:18px;padding:6px 8px 6px 14px;box-shadow:var(--shadow)}
+.search-field:focus-within{border-color:var(--grape)}
+.search-field svg{color:var(--muted);flex:none}
+.search-field input{flex:1;min-width:0;border:0;background:transparent;font-size:16px;font-weight:600;padding:8px 0;outline:none}
+.search-field input::-webkit-search-cancel-button{display:none}
+.search-results{margin-top:8px;background:var(--surface);border:1.5px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:6px;display:grid;gap:2px;max-height:70vh;overflow-y:auto}
+.sr{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;text-align:left;border:0;background:none;border-radius:12px;padding:8px;color:var(--ink);width:100%}
+.sr:hover,.sr:focus-visible,.sr[aria-selected="true"]{background:var(--surface-2)}
+.sr .th{width:52px;height:52px;border-radius:12px;overflow:hidden;position:relative;background:var(--surface-2)}
+.sr .th > span{position:absolute;inset:0}
+.sr b{display:block;font-size:15px;line-height:1.2}
+.sr small{display:block;color:var(--muted);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sr .meta{font-family:var(--mono);font-size:12px;font-weight:700;text-align:right;white-space:nowrap}
+.sr-head{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:8px 10px 4px}
+.sr-world{display:flex;align-items:center;gap:10px;border:1.5px dashed var(--line);background:none;border-radius:12px;padding:12px;font-weight:800;color:var(--grape);width:100%;text-align:left}
+.sr-note{padding:10px;color:var(--muted);font-size:13px}
+
 /* chat structure */
 .chat-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .daysep{display:flex;align-items:center;gap:10px;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:6px 0}

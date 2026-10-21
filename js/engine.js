@@ -14,11 +14,13 @@
     return set;
   }
   function bestText(best) {
+    if (!best) return "check local weather";
     return String(best || "").split(",").map(p => p.split("-").map(n => MONTHS[Number(n) - 1]).join("–")).join(", ");
   }
   function monthOf(iso) { const m = Number(String(iso || "").slice(5, 7)); return m >= 1 && m <= 12 ? m : 6; }
 
   function seasonFit(dest, month) {
+    if (!dest.best) return "ok"; // unknown seasons (custom places): neutral
     const good = parseBest(dest.best);
     if (good.has(month)) return "great";
     const prev = month === 1 ? 12 : month - 1, next = month === 12 ? 1 : month + 1;

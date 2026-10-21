@@ -38,6 +38,7 @@
       <span class="dot" aria-hidden="true"></span><span class="count" id="onlineCount">Just you</span>
       <span class="faces" id="onlineFaces"></span>
     </button>
+    <button class="me-btn search-btn" id="searchBtn" type="button" aria-label="Search destinations"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
     <button class="me-btn" id="meBtn" type="button" aria-label="Account"><img id="meAvatar" alt=""></button>
   </div>
 </header>
@@ -46,6 +47,12 @@
 <main>
   <!-- PLAN -->
   <section class="view wrap" id="view-plan" aria-label="Plan">
+    <div class="searchbox" id="searchBox">
+      <div class="search-field"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input type="search" id="searchInput" placeholder="Search any place: Kyoto, Spiti, Lisbon…" autocomplete="off" aria-label="Search any destination" enterkeyhint="search">
+        <button class="x small-x" id="searchClear" type="button" aria-label="Clear search" hidden>✕</button></div>
+      <div class="search-results" id="searchResults" hidden role="listbox" aria-label="Search results"></div>
+    </div>
     <form class="hero" id="planForm" novalidate>
       <div>
         <div class="eyebrow">Where should the crew go?</div>
@@ -174,6 +181,7 @@
 <script src="data/destinations.js"></script>
 <script src="data/places.js"></script>
 <script src="js/engine.js"></script>
+<script src="js/search.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

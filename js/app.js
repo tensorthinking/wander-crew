@@ -33,6 +33,8 @@ const G = {
   search: q => "https://www.google.com/search?q=" + encodeURIComponent(q),
   images: q => "https://www.google.com/search?tbm=isch&q=" + encodeURIComponent(q),
 };
+const code = d => d.iata || "✈";
+const flyTo = d => d.iata || (d.name + (d.country ? ", " + d.country : ""));
 const destCity = d => d.domestic ? `${d.name}, ${d.state}, India` : `${d.name}, ${d.country}`;
 const placeLink = (name, area, d) => `<a class="place" href="${esc(G.maps([name, area, d.domestic ? d.state + ", India" : d.country].filter(Boolean).join(", ")))}" target="_blank" rel="noopener">${esc(name)}</a>`;
 const ICON = {
@@ -137,7 +139,7 @@ function on(t, fn) { (listeners[t] = listeners[t] || []).push(fn); }
 
 const LOADERS = {
   profiles: async () => { S.profiles = Object.fromEntries((await DB.select("profiles")).map(p => [p.id, p])); renderPeople(); renderChat(); renderBoard(); renderTrips(); },
-  trips: async () => { S.trips = await DB.select("trips", { order: "created_at", desc: true, limit: 80 }); renderTrips(); refreshOpenTrip(); },
+  trips: async () => { S.trips = await DB.select("trips", { order: "created_at", desc: true, limit: 80 }); S.trips.forEach(t => { const c = t.form && t.form.customDest; if (c && c.key && !DEST[c.key]) DEST[c.key] = c; }); renderTrips(); refreshOpenTrip(); },
   trip_votes: async () => { S.votes = await DB.select("trip_votes"); renderTrips(); refreshOpenTrip(); },
   poll_votes: async () => { S.pollVotes = await DB.select("poll_votes"); renderChat(); },
   chat_messages: async () => { S.chat = (await DB.select("chat_messages", { order: "created_at", desc: true, limit: 100 })).reverse(); renderChat(); badge(); },
@@ -322,7 +324,7 @@ function aiLineFor(key) { return S.ai && S.ai.picks ? S.ai.picks.find(p => p.key
 function card(e, rank) {
   const d = e.dest, f = S.recForm, line = aiLineFor(d.key);
   const over = e.verdict === "nope" ? `Over by ${lakh(e.low - f.budget)}+` : e.verdict === "tight" ? "Tight fit" : "Fits budget";
-  const route = e.fl.mode === "road" ? `<span>🚗 Road trip from ${esc(ORIGINS[f.from].name)}</span>` : `<b>${esc(f.from)}</b><span class="line"></span><span>✈</span><span class="line"></span><b>${esc(d.iata)}</b>`;
+  const route = e.fl.mode === "road" ? `<span>🚗 Road trip from ${esc(ORIGINS[f.from].name)}</span>` : `<b>${esc(f.from)}</b><span class="line"></span><span>✈</span><span class="line"></span><b>${esc(code(d))}</b>`;
   return `<button class="pass" type="button" data-open="${esc(d.key)}" aria-label="Open ${esc(d.name)}">
     <div class="photo">${photoSlot(d, 0)}<span class="pill ${e.verdict}">${over}</span>${rank ? `<span class="rank">${rank}</span>` : ""}<span class="name">${esc(d.name)}<small>${esc(d.domestic ? d.state : d.country)}</small></span></div>
     <div class="stub">
@@ -453,12 +455,13 @@ async function openDest(key) {
       <div><b>Your budget</b><span class="mono">${lakh(f.budget)}</span> <span class="small" style="color:${e.verdict === "fits" ? "var(--good)" : e.verdict === "tight" ? "var(--warn)" : "var(--bad)"};font-weight:800">${e.verdict === "fits" ? "Fits" : e.verdict === "tight" ? "Tight" : "Over"}</span></div>
       <div><b>Season in ${E.MONTHS[e.month - 1]}</b>${e.season === "great" ? "Great time to go" : e.season === "ok" ? "Shoulder season" : "Off-season, expect weather"}<br><span class="small muted">Best: ${esc(E.bestText(d.best))}</span></div>
       <div><b>Entry</b>${esc(d.visaNote)}</div>
-      <div><b>Getting there</b>${e.fl.mode === "road" ? "Road trip, cheapest by car or bus" : `~${d.hrs}h flight to ${esc(d.iata)}, ${lakh(e.fl.low)}–${lakh(e.fl.high)} return`}</div>
+      <div><b>Getting there</b>${e.fl.mode === "road" ? "Road trip, cheapest by car or bus" : `~${d.hrs}h flight${d.iata ? " to " + esc(d.iata) : " to the nearest airport"}, ${lakh(e.fl.low)}–${lakh(e.fl.high)} return`}</div>
     </div>
+    ${d.custom ? `<div class="banner">📍 ${esc(d.where || d.country)}. Found via live search. Costs are estimated from ${d.basedOn ? "similar places like " + esc(d.basedOn) : "typical prices in " + esc((REGIONS.find(r => r.id === d.region) || {}).name || "this region")}, so check the live links before booking.</div>` : ""}
     ${line ? `<div class="wander"><div class="av" aria-hidden="true">✈</div><div><div class="who">Wander says</div><p>${esc(line.line)}</p>${line.catch ? `<p class="catch"><b>Catch:</b> ${esc(line.catch)}</p>` : ""}</div></div>` : ""}
     <div class="card"><h3>Famous for</h3><p style="margin:0">${esc(d.famous)}</p><div class="glinks">
       ${gl(G.maps(city), "pin", "Map")}${gl(G.hotels("hotels in " + city), "bed", "Hotels & prices")}
-      ${e.fl.mode === "road" ? gl(G.maps(`${ORIGINS[f.from].name} to ${city}`), "pin", "Route") : gl(G.flights(f.from, d.iata, f.start, end), "plane", "Flights")}
+      ${e.fl.mode === "road" ? gl(G.maps(`${ORIGINS[f.from].name} to ${city}`), "pin", "Route") : gl(G.flights(f.from, flyTo(d), f.start, end), "plane", "Flights")}
       ${gl(G.search("things to do in " + city), "star", "Things to do")}${gl(G.images(city + " travel"), "img", "Photos")}${gl(G.search(city + " weather " + E.MONTHS[e.month - 1]), "sun", "Weather")}
     </div></div>
     ${splitCard(e.breakdown, f.budget, `${STYLES[e.style].name} estimate, ${f.days} days`, `Wander Crew's cost model for ${f.people} sharing, ${E.MONTHS[e.month - 1]} fares from ${ORIGINS[f.from].name}. Check live prices with the links.`)}
@@ -466,7 +469,7 @@ async function openDest(key) {
     <div id="planArea"><button class="btn primary block" id="genPlan" type="button">🗺️ Build our ${f.days}-day itinerary</button><p class="muted small" style="margin:8px 0 0">Instant and free: day-by-day sights, live Google searches for hotels and food at your price level, budget split and booking links.</p></div>
   </div>`, "dest");
   galleryHTML(d).then(h => { const g = $("#gal"); if (g) g.innerHTML = h; });
-  const gp = $("#genPlan"); if (gp) gp.onclick = () => previewTrip(d, f, e);
+  const gp = $("#genPlan"); if (gp) gp.onclick = async () => { if (d.custom) { gp.disabled = true; gp.textContent = "Finding landmarks nearby…"; await Promise.race([ensureLandmarks(d), new Promise(r => setTimeout(r, 6000))]); } previewTrip(d, f, e); };
 }
 
 /* ------------------------------------------------------------------ instant itinerary (no AI) */
@@ -494,7 +497,7 @@ function autoPlan(d, f, e) {
     const [n, w] = fillers[fallbackIdx % fillers.length]; return { time, name: "", area, what: `${n}: ${w} in ${area}.`, cost: 0 };
   };
   const days = []; const dailyPP = Math.round(e.breakdown.food / D + e.breakdown.activities / D + e.breakdown.transport / D);
-  const arrive = e.fl.mode === "road" ? `Drive or bus from ${ORIGINS[f.from].name}` : `Fly ${f.from} → ${d.iata} (~${d.hrs}h)`;
+  const arrive = e.fl.mode === "road" ? `Drive or bus from ${ORIGINS[f.from].name}` : `Fly ${f.from} → ${d.iata || d.name} (~${d.hrs}h)`;
   // day 1
   days.push({ day: 1, title: "Arrive and settle in", base: areas[0][0], plan: [
     { time: "Morning", name: "", area: "", what: `${arrive}, then check in.`, cost: 0 },
@@ -537,10 +540,10 @@ function autoPlan(d, f, e) {
   const ga = (window.WC_GETAROUND || {})[d.region] || [];
   return {
     source: "auto",
-    headline: `${D} days of ${d.famous.split(",")[0].toLowerCase()} and more`,
+    headline: d.custom ? `${D} days in ${d.name}` : `${D} days of ${d.famous.split(",")[0].toLowerCase()} and more`,
     wanderSays: sarcasm,
-    speciality: d.famous.split(",").map(x => x.trim()).filter(Boolean),
-    getThere: { mode: e.fl.mode === "road" ? "road" : "flight", route: `${f.from} → ${d.iata}`, options: [e.fl.mode === "road" ? `Road trip from ${ORIGINS[f.from].name}, or an overnight bus/train` : `About ${d.hrs}h flying to ${d.iata}; compare direct vs one-stop`], fareLow: e.fl.low, fareHigh: e.fl.high, tip: e.fl.mode === "road" ? "Split a self-drive car or book a sleeper bus on redBus." : `${["May", "Jun", "Dec"].includes(month) ? "Peak season for Indian travellers: book 2–3 months ahead." : "Book 6–8 weeks ahead for the best fares."}` },
+    speciality: d.custom ? (P.a[0][1] || []).slice(0, 5) : d.famous.split(",").map(x => x.trim()).filter(Boolean),
+    getThere: { mode: e.fl.mode === "road" ? "road" : "flight", route: `${f.from} → ${d.iata || d.name}`, options: [e.fl.mode === "road" ? `Road trip from ${ORIGINS[f.from].name}, or an overnight bus/train` : d.iata ? `About ${d.hrs}h flying to ${d.iata}; compare direct vs one-stop` : `About ${d.hrs}h flying to the nearest airport, then road transfer`], fareLow: e.fl.low, fareHigh: e.fl.high, tip: e.fl.mode === "road" ? "Split a self-drive car or book a sleeper bus on redBus." : `${["May", "Jun", "Dec"].includes(month) ? "Peak season for Indian travellers: book 2–3 months ahead." : "Book 6–8 weeks ahead for the best fares."}` },
     stays, getAround: ga.map(([mode, cost, tip]) => ({ mode, cost, tip })), days,
     mustEat: dishes.slice(0, 6).map(x => ({ dish: x, name: "Best " + x, area: d.name.split(/[,&]/)[0].trim() })),
     budget: e.breakdown, fitsBudget: e.verdict !== "nope", tradeoffs: "",
@@ -561,7 +564,9 @@ function previewTrip(d, f, e) {
   sheetTrip = null; openSheet(tripHTML(previewT), "trip"); galleryHTML(d).then(h => { const g = $("#gal"); if (g) g.innerHTML = h; }); bindTrip(previewT);
 }
 async function saveTrip(t) {
-  const row = { dest_key: t.dest_key, form: t.form, estimate: t.estimate, plan: t.plan, total: t.total, created_by: S.me.id };
+  const dd = DEST[t.dest_key];
+  const form = dd && dd.custom ? { ...t.form, customDest: dd } : t.form;
+  const row = { dest_key: t.dest_key, form, estimate: t.estimate, plan: t.plan, total: t.total, created_by: S.me.id };
   const saved = await DB.insert("trips", row);
   const name = (DEST[t.dest_key] || {}).name;
   DB.insert("chat_messages", { user_id: S.me.id, kind: "system", body: `${t.plan.source === "ai" ? "had Wander plan" : "planned"} a ${t.form.days}-day ${name} trip (${lakh(t.total)} per person)` }).catch(() => {});
@@ -597,13 +602,13 @@ async function polishPlan(t) {
 
 /* ------------------------------------------------------------------ booking comparison */
 function bookingRows(d, f) {
-  const from = f.from, to = d.iata, s = f.start, e = addDays(f.start, f.days - 1);
+  const from = f.from, to = d.iata || "", s = f.start, e = addDays(f.start, f.days - 1);
   const dmy = iso => iso.split("-").reverse().join("/"), yymmdd = iso => iso.slice(2).replace(/-/g, "");
   const ad = Math.max(1, num(f.people)), rooms = Math.ceil(ad / 2), q = encodeURIComponent(d.domestic ? d.name.split(/[,&]/)[0].trim() : d.name.split(/[,&]/)[0].trim());
   const transport = [
-    { name: "Google Flights", url: G.flights(from, to, s, e), best: "Fast price graph and fare alerts.", watch: "Doesn't sell tickets; books via airline or agent." },
-    { name: "Skyscanner", url: `https://www.skyscanner.co.in/transport/flights/${from.toLowerCase()}/${to.toLowerCase()}/${yymmdd(s)}/${yymmdd(e)}/?adultsv2=${ad}`, best: "Compares every airline and OTA at once.", watch: "Third-party sellers; check their ratings." },
-    { name: "MakeMyTrip", url: `https://www.makemytrip.com/flight/search?itinerary=${from}-${to}-${dmy(s)}_${to}-${from}-${dmy(e)}&tripType=R&paxType=A-${ad}_C-0_I-0&intl=${d.domestic ? "false" : "true"}&cabinClass=E`, best: "Indian bank offers, UPI, no-cost EMI.", watch: "Convenience fee at checkout." },
+    { name: "Google Flights", url: G.flights(from, flyTo(d), s, e), best: "Fast price graph and fare alerts.", watch: "Doesn't sell tickets; books via airline or agent." },
+    { name: "Skyscanner", url: to ? `https://www.skyscanner.co.in/transport/flights/${from.toLowerCase()}/${to.toLowerCase()}/${yymmdd(s)}/${yymmdd(e)}/?adultsv2=${ad}` : "https://www.skyscanner.co.in/", best: "Compares every airline and OTA at once.", watch: "Third-party sellers; check their ratings." },
+    { name: "MakeMyTrip", url: to ? `https://www.makemytrip.com/flight/search?itinerary=${from}-${to}-${dmy(s)}_${to}-${from}-${dmy(e)}&tripType=R&paxType=A-${ad}_C-0_I-0&intl=${d.domestic ? "false" : "true"}&cabinClass=E` : "https://www.makemytrip.com/flights/", best: "Indian bank offers, UPI, no-cost EMI.", watch: "Convenience fee at checkout." },
     { name: "Cleartrip", url: "https://www.cleartrip.com/flights", best: "Clean checkout, frequent card offers.", watch: "Compare the final fare after fees." },
     { name: "EaseMyTrip", url: "https://www.easemytrip.com/", best: "Often zero convenience-fee promos.", watch: "Fewer filters on complex routes." },
   ];
@@ -650,10 +655,10 @@ function tripHTML(t) {
   ${auto && AI_ON ? `<div class="card flat" id="polishBox"><div class="vs" style="justify-content:space-between"><div><b>Want hand-picked hotels and restaurants?</b><div class="small muted">${polished ? "Someone already had Wander polish this exact trip." : "Wander names specific hotels and restaurants. Uses a little AI credit (about ₹1), takes ~20s, and the whole crew can reuse it."}</div></div><button class="btn small go" id="polishBtn" type="button">${polished ? "Open Wander's version" : "✨ Ask Wander to polish"}</button></div></div>` : ""}
   ${p.fitsBudget === false || p.tradeoffs ? `<div class="banner">${p.fitsBudget === false ? "<b>Heads up:</b> this plan runs over the budget. " : ""}${esc(p.tradeoffs || "")}</div>` : ""}
   ${(p.speciality || []).length ? `<div class="card"><h3>Famous for</h3><div class="chips">${p.speciality.map(s => `<a class="chip" href="${esc(G.search(s + " " + city))}" target="_blank" rel="noopener">${esc(s)}</a>`).join("")}</div></div>` : ""}
-  <div class="flight"><div><div class="code">${esc(f.from)}</div><div class="small">${esc(ORIGINS[f.from]?.name || "")}</div></div><div class="mid">${gt.mode === "train" ? "🚆" : gt.mode === "road" ? "🚗" : "✈"}<br>${esc((gt.options || [])[0] || "")}</div><div class="end"><div class="code">${esc(d.iata)}</div><div class="small">${esc(d.name.split(/[,&]/)[0])}</div></div></div>
+  <div class="flight"><div><div class="code">${esc(f.from)}</div><div class="small">${esc(ORIGINS[f.from]?.name || "")}</div></div><div class="mid">${gt.mode === "train" ? "🚆" : gt.mode === "road" ? "🚗" : "✈"}<br>${esc((gt.options || [])[0] || "")}</div><div class="end"><div class="code">${esc(code(d))}</div><div class="small">${esc(d.name.split(/[,&]/)[0])}</div></div></div>
   <div class="card"><div class="vs" style="justify-content:space-between"><h3>Getting there</h3>${gt.fareLow ? `<strong class="mono">${inr(gt.fareLow)}–${inr(gt.fareHigh)} return</strong>` : ""}</div>
     ${(gt.options || []).length ? `<ul class="list">${gt.options.map(o => `<li>${esc(o)}</li>`).join("")}</ul>` : ""}${gt.tip ? `<p class="note small">${esc(gt.tip)}</p>` : ""}
-    <div class="glinks">${gl(G.flights(f.from, d.iata, f.start, addDays(f.start, f.days - 1)), "plane", "Google Flights")}${d.domestic ? gl("https://www.irctc.co.in/nget/train-search", "train", "IRCTC trains") : ""}</div></div>
+    <div class="glinks">${gl(G.flights(f.from, flyTo(d), f.start, addDays(f.start, f.days - 1)), "plane", "Google Flights")}${d.domestic ? gl("https://www.irctc.co.in/nget/train-search", "train", "IRCTC trains") : ""}</div></div>
   <div class="card"><h3>Where to stay</h3>${(p.stays || []).map(s => `<div class="stack" style="gap:8px"><div class="vs" style="justify-content:space-between"><b>${placeLink(s.area, "", d)} · ${num(s.nights)} nights</b></div><div class="small muted">${esc(s.why)}</div>
     ${s.search ? `<div class="hotel"><div class="row"><b>${esc(s.search.label)}</b><span class="mono small">${s.search.perRoom ? "budget ~" + inr(s.search.perRoom) + "/night/room" : ""}</span></div><div class="small muted">Live results with today's prices, photos and reviews.</div><div class="glinks">${gl(G.hotels(s.search.q), "bed", "Google Hotels")}${gl(G.maps(s.search.q), "pin", "On the map")}</div></div>` : ""}
     ${(s.hotels || []).map(h => `<div class="hotel"><div class="row">${placeLink(h.name, h.area || s.area, d)}<span class="mono small">${h.perNightRoom ? "~" + inr(h.perNightRoom) + "/night/room" : ""}</span></div>${h.note ? `<div class="small muted">${esc(h.note)}</div>` : ""}<div class="glinks">${gl(G.hotels(`${h.name} ${h.area || s.area} ${d.domestic ? d.state : d.country}`), "bed", "Live prices")}</div></div>`).join("")}</div>`).join("") || `<p class="muted" style="margin:0">No stays listed.</p>`}</div>
@@ -1082,6 +1087,79 @@ async function newTot(e) {
     await setGame("tot", { roundId: uid(), prompt: String(out.prompt || ""), a: String(out.a), b: String(out.b), ea: String(out.ea || ""), eb: String(out.eb || ""), by: S.me.id });
   } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = "Try again"; }
 }
+
+/* ------------------------------------------------------------------ search UI */
+const SR = window.WCSearch;
+function registerCustom(d) {
+  if (!d || !d.key) return d;
+  DEST[d.key] = d;
+  const saved = store.get("customDest", {}); saved[d.key] = d; const ks = Object.keys(saved); if (ks.length > 30) delete saved[ks[0]]; store.set("customDest", saved);
+  return d;
+}
+Object.values(store.get("customDest", {})).forEach(d => { if (d && d.key && !DEST[d.key]) DEST[d.key] = d; });
+const landmarkWait = {};
+function ensureLandmarks(d) {
+  if (!d.custom || (window.WC_PLACES || {})[d.key]) return Promise.resolve();
+  if (landmarkWait[d.key]) return landmarkWait[d.key];
+  landmarkWait[d.key] = SR.nearbyLandmarks(d.lat, d.lon).then(list => {
+    window.WC_PLACES[d.key] = { a: [[d.name, list.length ? list : []]], e: ["local speciality", "street food", "regional thali or set meal"] };
+    if (list.length) d.wiki = [...new Set([...(d.wiki || []), ...list.slice(0, 2)])];
+    registerCustom(d);
+  }).catch(() => { delete landmarkWait[d.key]; });
+  return landmarkWait[d.key];
+}
+let searchTimer = null, searchSel = 0, worldHits = null, worldQuery = "";
+function resultRow(d, extra) {
+  const e = E.estimate(d, S.form);
+  return `<button class="sr" type="button" role="option" data-sopen="${esc(d.key)}"><span class="th">${photoSlot(d, 0)}</span><span style="min-width:0"><b>${esc(d.name)}</b><small>${esc(extra || (d.domestic ? d.state + ", India" : d.country))}</small></span><span class="meta">${lakh(e.typical)}<br><span style="color:${e.verdict === "fits" ? "var(--good)" : e.verdict === "tight" ? "var(--warn)" : "var(--bad)"}">${e.verdict === "fits" ? "fits" : e.verdict === "tight" ? "tight" : "over"}</span></span></button>`;
+}
+function renderSearch() {
+  const q = $("#searchInput").value.trim(), box = $("#searchResults");
+  $("#searchClear").hidden = !q;
+  if (q.length < 2) { box.hidden = true; return; }
+  const local = SR.localSearch(q);
+  let html = "";
+  if (local.length) html += `<div class="sr-head">In Wander Crew</div>` + local.map(x => resultRow(x.d, x.why || "")).join("");
+  if (worldHits && worldQuery === q) {
+    const hits = worldHits.filter(h => !local.some(x => norm2(x.d.name) === norm2(h.name)));
+    html += `<div class="sr-head">Anywhere on Earth</div>` + (hits.length ? hits.map((h, i) => `<button class="sr" type="button" role="option" data-world="${i}"><span class="th" style="display:grid;place-items:center;font-size:24px">📍</span><span style="min-width:0"><b>${esc(h.name)}</b><small>${esc([h.admin1, h.country].filter(Boolean).join(", "))}</small></span><span class="meta">${h.population ? Math.round(h.population / 1000) + "k ppl" : ""}</span></button>`).join("") : `<div class="sr-note">No places found for "${esc(q)}". Try a different spelling.</div>`);
+  } else {
+    html += `<button class="sr-world" type="button" id="worldBtn">🌍 Search the whole world for "${esc(q)}"</button>`;
+  }
+  box.innerHTML = html; box.hidden = false; hydrateAll(box);
+}
+const norm2 = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+async function worldSearch(q) {
+  const box = $("#searchResults"); worldQuery = q; worldHits = null;
+  const btn = $("#worldBtn"); if (btn) { btn.disabled = true; btn.textContent = "Searching the globe…"; }
+  try { worldHits = await SR.geocode(q); } catch (e) { worldHits = []; toast(e.message); }
+  if ($("#searchInput").value.trim() === q) renderSearch();
+}
+async function openCustomHit(h) {
+  const d = registerCustom(SR.buildCustom(h));
+  closeSearch();
+  openDest(d.key);
+  ensureLandmarks(d);
+}
+function closeSearch() { $("#searchResults").hidden = true; }
+$("#searchInput").addEventListener("input", () => { worldHits = null; clearTimeout(searchTimer); searchTimer = setTimeout(renderSearch, 120); });
+$("#searchInput").addEventListener("focus", renderSearch);
+$("#searchInput").addEventListener("keydown", e => {
+  if (e.key === "Escape") { closeSearch(); e.target.blur(); }
+  if (e.key === "Enter") {
+    e.preventDefault(); const q = e.target.value.trim(); if (q.length < 2) return;
+    const first = $("#searchResults .sr");
+    if (first && SR.localSearch(q).length && SR.localSearch(q)[0].score >= 10) first.click(); else worldSearch(q);
+  }
+});
+$("#searchClear").onclick = () => { $("#searchInput").value = ""; worldHits = null; renderSearch(); $("#searchInput").focus(); };
+$("#searchResults").addEventListener("click", e => {
+  const o = e.target.closest("[data-sopen]"); if (o) { closeSearch(); return openDest(o.dataset.sopen); }
+  if (e.target.closest("#worldBtn")) return worldSearch($("#searchInput").value.trim());
+  const w = e.target.closest("[data-world]"); if (w && worldHits) openCustomHit(worldHits[num(w.dataset.world)]);
+});
+document.addEventListener("click", e => { if (!e.target.closest("#searchBox")) closeSearch(); });
+$("#searchBtn").onclick = () => { setTab("plan"); setTimeout(() => { $("#searchInput").focus(); $("#searchBox").scrollIntoView({ block: "start" }); }, 60); };
 
 /* ------------------------------------------------------------------ tabs & account */
 function setTab(t) {
