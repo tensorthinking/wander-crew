@@ -1,0 +1,23 @@
+{
+  "id": "./",
+  "name": "Wander Crew",
+  "short_name": "Wander Crew",
+  "description": "Plan trips with your friends: realistic budgets, live prices, itineraries, group chat and games.",
+  "start_url": "./?source=app",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F3F5F9",
+  "theme_color": "#FF8A1F",
+  "categories": ["travel", "social", "lifestyle"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Plan a trip", "url": "./?tab=plan", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Crew chat", "url": "./?tab=crew", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Trip board", "url": "./?tab=trips", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

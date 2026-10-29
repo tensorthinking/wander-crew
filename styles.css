@@ -661,3 +661,13 @@ a.fl-opt:hover{border-color:var(--grape)}
 .live-foot{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .linkbtn{background:none;border:0;padding:0;color:var(--grape);font-weight:700;cursor:pointer;font:inherit;font-size:12.5px}
 .live-total{margin:0;font-size:13px}
+
+/* ---------- installable app ---------- */
+.install-bar{position:fixed;left:12px;right:12px;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:60;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 12px;border-radius:16px;background:var(--surface);border:1px solid var(--line);box-shadow:0 12px 32px rgba(10,16,30,.18);max-width:520px;margin:0 auto;animation:up .3s ease}
+.install-bar img{width:40px;height:40px;border-radius:10px;flex:none}
+.install-bar span{display:flex;flex-direction:column;flex:1;min-width:0}
+.install-bar b{font-size:14px}.install-bar small{font-size:12px;color:var(--muted)}
+.x-mini{background:none;border:0;color:var(--muted);font-size:14px;padding:6px;cursor:pointer}
+.offline-bar{position:fixed;bottom:calc(86px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);z-index:70;background:#1F2433;color:#fff;font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:99px;box-shadow:0 6px 18px rgba(0,0,0,.25);max-width:calc(100% - 24px);text-align:center}
+.ios-steps{margin:0 0 10px;padding-left:20px;display:grid;gap:8px;font-size:14px}
+@media (display-mode: standalone){.update-bar{bottom:calc(84px + env(safe-area-inset-bottom,0px))}}

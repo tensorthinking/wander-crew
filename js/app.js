@@ -96,6 +96,7 @@ const S = {
 };
 
 /* ------------------------------------------------------------------ data layer */
+const OFFLINE_TABLES = ["profiles", "trips", "trip_votes", "chat_messages", "poll_votes", "ideas"];
 const LOCAL_TABLES = ["profiles", "trips", "trip_votes", "chat_messages", "poll_votes", "ideas", "idea_votes", "game_state", "game_moves", "crew_allowlist"];
 const local = { get: t => store.get("db:" + t, []), set: (t, rows) => store.set("db:" + t, rows) };
 const DB = {
@@ -108,7 +109,16 @@ const DB = {
     let req = sb.from(t).select("*");
     if (q.order) req = req.order(q.order, { ascending: !q.desc });
     if (q.limit) req = req.limit(q.limit);
-    const { data, error } = await req; if (error) throw error; return data || [];
+    const snapKey = "snap:" + t + ":" + (q.order || "") + (q.desc ? "d" : "") + (q.limit || "");
+    try {
+      const { data, error } = await req; if (error) throw error;
+      if (OFFLINE_TABLES.includes(t)) store.set(snapKey, data || []);
+      return data || [];
+    } catch (e) {
+      const snap = store.get(snapKey, null);
+      if (snap && (!navigator.onLine || /fetch|network|Failed/i.test(String(e && e.message)))) { S.offline = true; return snap; }
+      throw e;
+    }
   },
   async insert(t, row) {
     if (!LIVE) {
@@ -292,12 +302,14 @@ async function boot() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return showGate();
   const user = session.user;
-  const { data: crew, error } = await sb.rpc("is_crew");
+  let { data: crew, error } = await sb.rpc("is_crew");
+  if (error && store.get("crewOK", "") === session.user.id && (!navigator.onLine || /fetch|network|Failed/i.test(error.message || ""))) { crew = true; error = null; S.offline = true; }
+  if (crew) store.set("crewOK", session.user.id);
   if (error || !crew) return showGate(`You're signed in as <b>${esc(user.email)}</b>, but that email isn't on this crew's list yet. Ask the organiser to add it, then reload.`);
   const meta = user.user_metadata || {};
   S.me = { id: user.id, email: user.email, name: meta.full_name || meta.name || user.email.split("@")[0], avatar: meta.avatar_url || meta.picture || null };
-  await sb.from("profiles").upsert({ id: S.me.id, name: S.me.name, avatar_url: S.me.avatar, last_seen: new Date().toISOString() });
-  const { data: adm } = await sb.rpc("is_crew_admin"); S.isAdmin = !!adm;
+  try { await sb.from("profiles").upsert({ id: S.me.id, name: S.me.name, avatar_url: S.me.avatar, last_seen: new Date().toISOString() }); } catch {}
+  try { const { data: adm } = await sb.rpc("is_crew_admin"); S.isAdmin = !!adm; } catch { S.isAdmin = false; }
   sb.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_OUT") location.reload(); });
   startApp();
 }
@@ -321,6 +333,8 @@ async function startApp() {
   $$(".admin-only").forEach(el => el.hidden = !S.isAdmin && LIVE);
   initForm(); runPlan(false);
   await Promise.all(Object.keys(LOADERS).map(t => LOADERS[t]().catch(e => console.warn(t, e))));
+  const qTab = new URLSearchParams(location.search).get("tab"); if (["plan", "trips", "crew", "games"].includes(qTab)) setTab(qTab);
+  updateOfflineBar();
   if (LIVE) {
     const ch = sb.channel("db-changes");
     ["profiles", "trips", "trip_votes", "chat_messages", "poll_votes", "ideas", "idea_votes", "game_state", "game_moves"].forEach(t =>
@@ -1422,6 +1436,40 @@ setInterval(checkForUpdate, 5 * 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkForUpdate(); });
 setTimeout(checkForUpdate, 8000);
 
+
+/* ------------------------------------------------------------------ installable app (PWA) */
+let installEvt = null;
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("sw", e)));
+}
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; maybeInstallNudge(); refreshInstallRow(); });
+window.addEventListener("appinstalled", () => { installEvt = null; store.set("installed", 1); toast("Installed! Find Wander Crew on your home screen ✈️"); refreshInstallRow(); $(".install-bar")?.remove(); });
+async function installApp() {
+  if (isStandalone()) return toast("You're already using the app 🎉");
+  if (installEvt) { installEvt.prompt(); const r = await installEvt.userChoice.catch(() => ({})); if (r && r.outcome === "accepted") installEvt = null; refreshInstallRow(); return; }
+  if (isIOS()) return openSheet(`<div class="wrap"><div class="sheet-head">${X}<h2 id="sheetTitle">Install on iPhone</h2></div><div class="card"><ol class="ios-steps"><li>Open this page in <b>Safari</b>.</li><li>Tap the <b>Share</b> button (the square with an arrow).</li><li>Scroll and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol><p class="small muted" style="margin:0">Wander Crew then opens full screen like a normal app.</p></div></div>`, "install");
+  toast("Open the browser menu (⋮) and tap “Install app” or “Add to Home screen”.");
+}
+function maybeInstallNudge() {
+  if (isStandalone() || store.get("installNudge", 0) > Date.now() || $(".install-bar")) return;
+  const bar = document.createElement("div"); bar.className = "install-bar";
+  bar.innerHTML = `<img src="icons/icon-192.png" alt=""><span><b>Install Wander Crew</b><small>Home-screen app, works offline</small></span><button class="btn small primary" type="button" data-inst="go">Install</button><button class="x-mini" type="button" data-inst="no" aria-label="Not now">✕</button>`;
+  bar.onclick = e => { const b = e.target.closest("[data-inst]"); if (!b) return; if (b.dataset.inst === "go") installApp(); store.set("installNudge", Date.now() + 7 * 864e5); bar.remove(); };
+  setTimeout(() => { if (!isStandalone()) document.body.append(bar); }, 4000);
+}
+function refreshInstallRow() { const r = $("#installRow"); if (r) r.outerHTML = installRowHTML(); }
+const installRowHTML = () => isStandalone() ? "" : `<div class="set-row" id="installRow"><span><b>Install the app</b><small>${isIOS() ? "Add it to your home screen from Safari" : "Home-screen icon, full screen, works offline"}</small></span><button class="btn small primary" type="button" data-act="install">Install</button></div>`;
+function updateOfflineBar() {
+  let bar = $(".offline-bar");
+  if (navigator.onLine && !S.offline) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement("div"); bar.className = "offline-bar"; document.body.append(bar); }
+  bar.textContent = "📴 Offline: showing your last saved trips and chat. Changes need a connection.";
+}
+window.addEventListener("online", () => { S.offline = false; updateOfflineBar(); Object.keys(LOADERS).forEach(t => reload(t)); });
+window.addEventListener("offline", updateOfflineBar);
+
 /* ------------------------------------------------------------------ settings */
 const ACCENTS = { purple: ["#6A5AE0", "#8F83F2"], pink: ["#D9467A", "#EE6E91"], teal: ["#13908F", "#3BB5B5"], orange: ["#D9781E", "#F0A64A"], green: ["#1E8F57", "#45C084"], blue: ["#2F6FE0", "#6C9CF5"] };
 function applyPrefs() {
@@ -1503,6 +1551,7 @@ function settingsHTML() {
   </div></div>
 
   <div class="set-group"><div class="eyebrow">About</div><div class="card">
+    ${installRowHTML()}
     <div class="set-row"><span><b>Version</b><small>${esc(window.WC_BUILD || "dev")}</small></span><button class="btn small" type="button" data-act="update">Check for updates</button></div>
     ${LIVE ? `<div class="set-row"><span><b>Signed in as</b><small>${esc(S.me.email)}</small></span><button class="btn small" type="button" data-act="signout">Sign out</button></div>` : ""}
   </div></div>
@@ -1523,6 +1572,7 @@ function openSettings() {
     if (a === "clearCache") { ["photos", "gems", "hottake", "aiPicks"].forEach(k => { try { localStorage.removeItem("wc:" + k); } catch {} }); toast("Cleared. Photos will reload as you browse."); }
     if (a === "clearSearch") { try { localStorage.removeItem("wc:customDest"); } catch {} toast("Searched places forgotten."); }
     if (a === "resetForm") { try { localStorage.removeItem("wc:form"); } catch {} S.form = { budget: 120000, style: 1, days: 6, people: 4, start: "2027-06-12", from: "BLR", regions: [], vibes: [] }; initForm(); toast("Planner reset."); closeSheet(); }
+    if (a === "install") return installApp();
     if (a === "update") { updateShown = false; await checkForUpdate(); if (!$(".update-bar")) toast("You're on the latest version ✨"); }
     if (a === "signout") { await sb.auth.signOut(); location.reload(); }
   };

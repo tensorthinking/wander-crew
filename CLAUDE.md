@@ -24,7 +24,8 @@ Live at https://tensorthinking.github.io/wander-crew/ · Repo: tensorthinking/wa
 - `js/config.js`: public Supabase URL + anon key. Empty values = preview mode (local data, AI off).
 - `supabase/schema.sql`, `002_*.sql`, `003_price_cache.sql`: database setup (already applied).
 - `supabase/functions/wander-ai/index.ts`: Edge Function. AI tasks (picks, itinerary, chat, aipoll, roast, surprise, fun, ideas, quiz, tot) via Anthropic, plus `prices` (live Google Flights/Hotels via SerpApi with shared cache, peek mode, per-person daily cap).
-- `bump.sh`: stamps a new build number on asset URLs. Run before every commit so phones pick up changes.
+- `manifest.webmanifest`, `icons/`, `sw.js`: installable app (PWA). The service worker serves app files network-first with an offline fallback, caches photos and fonts, and never caches Supabase, AI or price calls. Home-screen shortcuts open `?tab=plan|crew|trips`.
+- `bump.sh`: stamps a new build number on asset URLs and the service worker cache version. Run before every commit so phones pick up changes.
 
 ## Secrets (Supabase > Edge Functions > Secrets, project szsjflqnoisdnxuhoomn)
 - `ANTHROPIC_API_KEY` (required), `ANTHROPIC_MODEL` (default claude-haiku-5-5), `AI_DAILY_LIMIT` (default 100)
@@ -62,4 +63,4 @@ Crew access is controlled by the `crew_allowlist` table and the `is_crew()` / `i
 - Dates off by one: always build dates with `Date.UTC` (see `addDays`).
 
 ## Ideas backlog (all free to run)
-Long-weekend finder (public holidays + leave optimiser), date-availability heatmap, expense splitter with UPI links, trip poster for Instagram stories, installable PWA with offline itinerary, weather for trip dates, currency converter, shared packing list, calendar export, crew map, badges, travel bingo, Crew Wrapped, photo wall.
+Long-weekend finder (public holidays + leave optimiser), date-availability heatmap, expense splitter with UPI links, trip poster for Instagram stories, weather for trip dates, currency converter, shared packing list, calendar export, crew map, badges, travel bingo, Crew Wrapped, photo wall.
